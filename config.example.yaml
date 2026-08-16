@@ -1,0 +1,22 @@
+# Mappatura personalizzata categorie FIC per vendor
+# Se un vendor non matcha, usa "Altri costi" + flag needs_review.
+categories:
+  aws: "Servizi hosting e cloud"
+  digitalocean: "Servizi hosting e cloud"
+  hetzner: "Servizi hosting e cloud"
+  github: "Abbonamenti software SaaS"
+  notion: "Abbonamenti software SaaS"
+  slack: "Abbonamenti software SaaS"
+  openai: "Abbonamenti software SaaS"
+  google: "Pubblicità e marketing"
+  meta: "Pubblicità e marketing"
+  namecheap: "Domini e registrazioni"
+  godaddy: "Domini e registrazioni"
+
+# Conto FIC di default per ogni categoria
+accounts:
+  "Servizi hosting e cloud": "Costi per servizi informatici"
+  "Abbonamenti software SaaS": "Spese per servizi"
+  "Domini e registrazioni": "Costi per servizi informatici"
+  "Pubblicità e marketing": "Spese di pubblicità"
+  "Altri costi": "Costi vari"

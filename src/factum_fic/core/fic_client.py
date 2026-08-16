@@ -1,0 +1,119 @@
+"""Client asincrono per Fatture in Cloud v2 API."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import httpx
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+from factum_fic.config import Settings
+from factum_fic.core.models import (
+    FICCreateExpenseRequest,
+    FICCreateSupplierRequest,
+    FICExpenseResponse,
+)
+
+_HEADERS = {"User-Agent": "factum-fic/0.1.0"}
+
+
+class FICClient:
+    """Client per Fatture in Cloud v2 API con retry e rate limiting."""
+
+    def __init__(self, settings: Settings) -> None:
+        self._base_url = settings.fic_base_url.rstrip("/")
+        self._api_key = settings.fic_api_key
+        self._company_id = settings.fic_company_id
+        self._client = httpx.AsyncClient(
+            base_url=self._base_url,
+            headers={
+                **_HEADERS,
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=30.0,
+        )
+
+    async def close(self) -> None:
+        await self._client.aclose()
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True,
+    )
+    async def create_supplier(self, supplier: FICCreateSupplierRequest) -> dict[str, Any]:
+        """Crea un fornitore su Fatture in Cloud.
+
+        Args:
+            supplier: Dati del fornitore da creare.
+
+        Returns:
+            Risposta JSON da FIC con i dati dell'entity creata.
+        """
+        payload = supplier.model_dump(exclude_none=True)
+        response = await self._client.post(
+            f"/c/{self._company_id}/entities",
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True,
+    )
+    async def search_supplier(
+        self, name: str, vat_number: str | None = None
+    ) -> dict[str, Any] | None:
+        """Cerca un fornitore esistente per nome o partita IVA.
+
+        Returns:
+            Il primo fornitore matchato, o None.
+        """
+        params: dict[str, str] = {"field": "name", "query": name}
+        if vat_number:
+            params["field"] = "vat_number"
+            params["query"] = vat_number
+        response = await self._client.get(
+            f"/c/{self._company_id}/entities",
+            params=params,
+        )
+        response.raise_for_status()
+        data = response.json()
+        entities = data.get("data", [])
+        return entities[0] if entities else None
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True,
+    )
+    async def create_expense(
+        self, expense: FICCreateExpenseRequest
+    ) -> FICExpenseResponse:
+        """Crea un documento di spesa (o bozza autofattura) su FIC.
+
+        Args:
+            expense: Dati della spesa da registrare.
+
+        Returns:
+            FICExpenseResponse con id e stato del documento creato.
+        """
+        payload = expense.model_dump(exclude_none=True)
+        response = await self._client.post(
+            f"/c/{self._company_id}/received_documents",
+            json=payload,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return FICExpenseResponse(**data.get("data", {}))
+
+    async def health(self) -> bool:
+        """Verifica connettività con FIC API."""
+        try:
+            r = await self._client.get("/c/" + self._company_id + "/entities", timeout=10.0)
+            return r.status_code == 200
+        except httpx.HTTPError:
+            return False

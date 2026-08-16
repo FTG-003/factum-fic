@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "factum-fic"
+version = "0.1.0"
+description = "Daemon CLI + folder watcher per registrazione automatica fatture su Fatture in Cloud tramite Factum Parse API"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+    { name = "Fabrizio Terzi", email = "info@pyragogy.org" },
+]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Accounting",
+]
+
+dependencies = [
+    "httpx >= 0.27.0",
+    "typer[all] >= 0.12.0",
+    "rich >= 13.7.0",
+    "pydantic >= 2.7.0",
+    "pydantic-settings >= 2.2.0",
+    "pyyaml >= 6.0.1",
+    "watchdog >= 4.0.0",
+    "tenacity >= 8.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest >= 8.0.0",
+    "ruff >= 0.4.0",
+]
+
+[project.scripts]
+factum-fic = "factum_fic.cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/factum_fic"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.coverage.run]
+source = ["factum_fic"]
