@@ -24,6 +24,59 @@ from factum_fic.storage.queue import QueueStore
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 
+
+def _write_minimal_pdf(path: Path, text: str) -> None:
+    """Scrive un PDF 1.4 minimale con una pagina di testo."""
+    content_data = f"BT /F1 14 Tf 50 550 Td ({text}) Tj ET\n".encode()
+
+    parts: list[bytes] = [b"%PDF-1.4\n"]
+    offsets = [None]
+    offset = len(parts[0])
+
+    def _obj(data: bytes) -> int:
+        nonlocal offset
+        offsets.append(offset)
+        parts.append(data)
+        offset += len(data)
+        return len(offsets) - 1
+
+    _obj(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+    _obj(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n")
+    _obj(
+        b"3 0 obj\n"
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]\n"
+        b"   /Contents 4 0 R\n"
+        b"   /Resources << /Font << /F1 5 0 R >> >> >>\n"
+        b"endobj\n"
+    )
+    _obj(
+        b"4 0 obj\n"
+        b"<< /Length " + str(len(content_data)).encode() + b" >>\n"
+        b"stream\n" + content_data + b"endstream\n"
+        b"endobj\n"
+    )
+    _obj(
+        b"5 0 obj\n"
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\n"
+        b"endobj\n"
+    )
+
+    xref_offset = sum(len(p) for p in parts)
+    xref = b"xref\n"
+    xref += b"0 6\n"
+    xref += b"%010d %05d %c \n" % (0, 65535, ord("f"))
+    for off in offsets[1:]:
+        xref += b"%010d %05d %c \n" % (off, 0, ord("n"))
+
+    parts.append(xref)
+    parts.append(b"trailer\n")
+    parts.append(b"<< /Size 6 /Root 1 0 R >>\n")
+    parts.append(b"startxref\n")
+    parts.append(str(xref_offset).encode() + b"\n")
+    parts.append(b"%%EOF\n")
+
+    path.write_bytes(b"".join(parts))
+
 # ── Mock transports ──────────────────────────────────────────────────────────
 
 
@@ -430,9 +483,12 @@ async def test_pipeline_with_attachment(
     tmp_path: Path,
 ) -> None:
     """File PDF → Factum OK → FIC expense creato + allegato caricato."""
-    # Crea un finto PDF (solo contenuto testuale)
+    # Crea un PDF valido con testo estraibile tramite pypdf
     pdf_path = tmp_path / "test_invoice.pdf"
-    pdf_path.write_bytes(b"%PDF-1.4 test invoice content digitalocean inc.")
+    _write_minimal_pdf(
+        pdf_path,
+        text="digitalocean inc 59.00 USD servizio cloud",
+    )
 
     result = await process_file(
         pdf_path,

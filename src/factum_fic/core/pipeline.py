@@ -1,13 +1,13 @@
-"""Orchestratore: File → Hash → Factum Parse → Mapper → FIC.
+"""Orchestratore: File → Hash → Text extraction → Factum Parse → Mapper → FIC.
 
 Gestisce l'intero flusso:
 1. Legge il file, calcola SHA-256
-2. Estrae testo (PDF/XML) o usa contenuto testuale
-3. Invia a Factum Parse API per parsing
+2. Estrae testo locale (PDF via pypdf, XML/TXT/CSV lettura diretta)
+3. Invia il testo estratto a Factum Parse API per parsing
 4. Mappa il risultato in request FIC
 5. Registra su Fatture in Cloud (spesa o autofattura)
 
-File lifecycle: inbox → processed/YYYY-MM/ (successo/duplicato) | failed/YYYY-MM/ (errore)
+File lifecycle: da_elaborare → elaborate/YYYY-MM/ (successo/duplicato) | errori/YYYY-MM/ (errore)
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import shutil
 from pathlib import Path
 
 from factum_fic.config import Settings
+from factum_fic.core.extractor import extract_text
 from factum_fic.core.factum_client import FactumClient
 from factum_fic.core.fic_client import FICClient
 from factum_fic.core.mapper import Mapper
@@ -92,29 +93,6 @@ def move_to_failed(path: Path, settings: Settings) -> Path:
 
 # ── Helper interni ────────────────────────────────────────────────────────────
 
-def _extract_text(path: Path) -> tuple[str, str]:
-    """Estrae il contenuto testuale da un file.
-
-    Per ora supporta solo file di testo semplice.
-
-    Returns:
-        (testo_estratto, tipo_documento)
-    """
-    ext = path.suffix.lower()
-    if ext in {".txt", ".csv", ".json"}:
-        text = path.read_text(encoding="utf-8", errors="replace")
-        return text, "auto"
-
-    # PDF e XML verranno gestiti in fasi successive
-    # Per ora leggiamo come testo (fallback)
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-        return text, "auto"
-    except (UnicodeDecodeError, Exception):
-        # File binario (PDF): estrazione da implementare
-        return "", "auto"
-
-
 def _sha256_file(path: Path) -> str:
     """Calcola SHA-256 di un file."""
     h = hashlib.sha256()
@@ -176,10 +154,11 @@ async def process_file(
 
     queue.enqueue(sha, str(path))
 
-    # Estrai testo
-    text, doc_type = _extract_text(path)
-    if not text:
-        logger.warning("Testo vuoto per %s", path.name)
+    # Estrai testo tramite estrattore locale
+    try:
+        text = extract_text(path)
+    except ValueError as exc:
+        logger.warning("Testo non estraibile per %s: %s", path.name, exc)
         result = PipelineResult(
             file=file_event,
             status=DocumentStatus.FAILED,
@@ -193,7 +172,7 @@ async def process_file(
 
     # Chiamata Factum
     try:
-        factum_resp = await factum.parse_text(text, doc_type=doc_type)
+        factum_resp = await factum.parse_text(text)
     except Exception as exc:
         logger.exception("Factum parsing fallito per %s", path.name)
         result = PipelineResult(
