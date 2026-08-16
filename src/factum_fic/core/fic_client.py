@@ -271,3 +271,22 @@ class FICClient:
             return r.status_code == 200
         except httpx.HTTPError:
             return False
+
+    # ── Info azienda ──────────────────────────────────────────────────────────
+
+    @selective_retry
+    async def get_company_info(self) -> dict[str, Any]:
+        """Recupera le informazioni fiscali dell'azienda da FIC v2.
+
+        Returns:
+            Dizionario con id, name, tax_regime, vat_number, fiscal_code.
+
+        Raises:
+            httpx.HTTPStatusError: Se l'API rifiuta la richiesta.
+        """
+        response = await self._client.get(
+            f"/c/{self._company_id}/company/info",
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data.get("data", {})

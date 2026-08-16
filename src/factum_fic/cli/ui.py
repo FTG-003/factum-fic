@@ -15,6 +15,16 @@ def print_info(message: str) -> None:
     console.print(f"[blue]ℹ[/blue] {message}")
 
 
+def print_warning(message: str) -> None:
+    """Stampa un avviso."""
+    console.print(f"[yellow]⚠[/yellow] {message}")
+
+
+def print_ok(message: str) -> None:
+    """Stampa un messaggio di successo."""
+    console.print(f"[green]✓[/green] {message}")
+
+
 def print_error(message: str) -> None:
     """Stampa un messaggio di errore."""
     console.print(f"[red]✗[/red] {message}")

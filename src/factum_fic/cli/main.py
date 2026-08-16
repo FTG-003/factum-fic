@@ -9,7 +9,7 @@ from pathlib import Path
 import typer
 
 from factum_fic import __version__
-from factum_fic.cli.ui import console, print_error, print_info, print_result_table
+from factum_fic.cli.ui import console, print_error, print_info, print_result_table, print_warning
 from factum_fic.config import load_settings, load_yaml_config
 from factum_fic.core.pipeline import ensure_dirs
 
@@ -44,6 +44,7 @@ def process(
     config_file: str = typer.Option("", "--config", "-c", help="Percorso YAML categorie"),
 ) -> None:
     """Processa un singolo file fattura e lo registra su FIC."""
+    from factum_fic.cli.verify import verify_and_bind, ForfettarioCheckError
     from factum_fic.core.factum_client import FactumClient
     from factum_fic.core.fic_client import FICClient
     from factum_fic.core.mapper import Mapper
@@ -61,6 +62,13 @@ def process(
         factum = FactumClient(settings)
         fic = FICClient(settings)
         try:
+            # Verifica regime fiscale e aggancia metadati Factum
+            try:
+                await verify_and_bind(fic, factum)
+            except ForfettarioCheckError as e:
+                print_error(str(e))
+                raise typer.Exit(code=1)
+
             result = await process_file(
                 Path(path),
                 factum=factum,
@@ -87,6 +95,7 @@ def process_inbox(
     from factum_fic.core.factum_client import FactumClient
     from factum_fic.core.fic_client import FICClient
     from factum_fic.core.mapper import Mapper
+    from factum_fic.core.models import PipelineResult
     from factum_fic.core.pipeline import process_file, is_temp_file
     from factum_fic.storage.queue import QueueStore
 
@@ -116,7 +125,15 @@ def process_inbox(
     async def _run() -> None:
         factum = FactumClient(settings)
         fic = FICClient(settings)
-        results: list[PipelineResult] = []  # type: ignore[annotation-unchecked]
+        results: list[PipelineResult] = []
+
+        # Verifica regime fiscale una tantum per tutti i file
+        from factum_fic.cli.verify import verify_and_bind, ForfettarioCheckError
+        try:
+            await verify_and_bind(fic, factum)
+        except ForfettarioCheckError as e:
+            print_error(str(e))
+            raise typer.Exit(code=1)
 
         try:
             for path in files:
@@ -153,6 +170,7 @@ def watch(
     config_file: str = typer.Option("", "--config", "-c", help="Percorso YAML categorie"),
 ) -> None:
     """Avvia il watcher su una directory per elaborazione automatica."""
+    from factum_fic.cli.verify import verify_and_bind, ForfettarioCheckError
     from factum_fic.core.factum_client import FactumClient
     from factum_fic.core.fic_client import FICClient
     from factum_fic.core.mapper import Mapper
@@ -188,6 +206,13 @@ def watch(
             print_result_table([result])
         except Exception as e:
             print_error(f"❌ Errore: {e}")
+
+    # Verifica regime fiscale prima di avviare il watcher
+    try:
+        asyncio.run(verify_and_bind(fic, factum))
+    except ForfettarioCheckError as e:
+        print_error(str(e))
+        raise typer.Exit(code=1)
 
     daemon = WatcherDaemon(settings, lambda p: asyncio.run(_on_file(p)))
 
@@ -238,9 +263,10 @@ def queue(
 
 @app.command()
 def check() -> None:
-    """Verifica connettività con Factum e FIC."""
+    """Verifica connettività con Factum e FIC e regime fiscale."""
     from factum_fic.core.factum_client import FactumClient
     from factum_fic.core.fic_client import FICClient
+    from factum_fic.cli.verify import verify_and_bind, ForfettarioCheckError
 
     settings = load_settings()
 
@@ -249,16 +275,48 @@ def check() -> None:
         fic = FICClient(settings)
         try:
             factum_ok = await factum.health()
+            console.print(f"  Factum Parse API: {'✅' if factum_ok else '❌'} {settings.factum_api_url}")
             fic_ok = await fic.health()
-            console.print("[bold]Verifica connettività:[/bold]")
-            console.print(
-                f"  Factum Parse API: {'✅' if factum_ok else '❌'} {settings.factum_api_url}"
-            )
-            console.print(
-                f"  Fatture in Cloud:  {'✅' if fic_ok else '❌'} {settings.fic_base_url}"
-            )
+            console.print(f"  Fatture in Cloud:  {'✅' if fic_ok else '❌'} {settings.fic_base_url}")
+            if fic_ok:
+                try:
+                    info = await verify_and_bind(fic, factum)
+                    console.print(f"  Azienda:          {info['name']}")
+                    console.print(f"  P.IVA:            {info['vat_number']}")
+                    console.print(f"  Regime fiscale:   {info['tax_regime']} ✅")
+                except ForfettarioCheckError as e:
+                    print_error(str(e))
+                    raise typer.Exit(code=1)
         finally:
             await factum.close()
             await fic.close()
 
+    console.print("[bold]Verifica connettività:[/bold]")
     asyncio.run(_check())
+
+
+@app.command()
+def verify() -> None:
+    """Verifica il regime fiscale dell'azienda su Fatture in Cloud."""
+    from factum_fic.core.factum_client import FactumClient
+    from factum_fic.core.fic_client import FICClient
+    from factum_fic.cli.verify import verify_and_bind, ForfettarioCheckError
+
+    settings = load_settings()
+
+    async def _verify() -> None:
+        factum = FactumClient(settings)
+        fic = FICClient(settings)
+        try:
+            info = await verify_and_bind(fic, factum)
+            print_ok(f"Regime fiscale verificato: {info['tax_regime']}")
+            print_ok(f"Azienda: {info['name']} (P.IVA {info['vat_number']})")
+            print_ok(f"Binding Factum completato: header X-FIC-VAT trasmesso")
+        except ForfettarioCheckError as e:
+            print_error(str(e))
+            raise typer.Exit(code=1)
+        finally:
+            await factum.close()
+            await fic.close()
+
+    asyncio.run(_verify())
