@@ -33,7 +33,7 @@ def _main(
 ) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(level=level, format="%(levelname)s  %(message)s")
-    # Assicura che le directory inbox/processed/failed esistano
+    # Assicura che le directory da_elaborare/elaborate/errori esistano
     settings = load_settings()
     ensure_dirs(settings)
 

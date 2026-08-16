@@ -30,6 +30,6 @@ htmlcov/
 config.yaml
 
 # Document workspace folders (fiscal data — never commit)
-/inbox/
-/processed/
-/failed/
+/da_elaborare/
+/elaborate/
+/errori/
