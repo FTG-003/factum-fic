@@ -122,8 +122,15 @@ def _mock_fic_transport() -> httpx.MockTransport:
     """Mock Fatture in Cloud v2 API."""
 
     def handler(request: httpx.Request) -> httpx.Response:
-        # Health check → entities list
-        if request.url.path.endswith("/entities") and request.method == "GET":
+        # Health check → user/info
+        if request.url.path == "/user/info" and request.method == "GET":
+            return httpx.Response(
+                200,
+                json={"data": {"id": 2107961, "email": "test@test.com"}},
+            )
+
+        # Search supplier
+        if request.url.path.endswith("/entities/suppliers") and request.method == "GET":
             return httpx.Response(
                 200,
                 json={
@@ -138,8 +145,8 @@ def _mock_fic_transport() -> httpx.MockTransport:
                 },
             )
 
-        # Create entity
-        if request.url.path.endswith("/entities") and request.method == "POST":
+        # Create supplier
+        if request.url.path.endswith("/entities/suppliers") and request.method == "POST":
             return httpx.Response(
                 201,
                 json={

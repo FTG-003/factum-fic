@@ -53,7 +53,7 @@ class FICClient:
         """
         payload = supplier.model_dump(exclude_none=True)
         response = await self._client.post(
-            f"/c/{self._company_id}/entities",
+            f"/c/{self._company_id}/entities/suppliers",
             json=payload,
         )
         response.raise_for_status()
@@ -77,7 +77,7 @@ class FICClient:
             params["field"] = "vat_number"
             params["query"] = vat_number
         response = await self._client.get(
-            f"/c/{self._company_id}/entities",
+            f"/c/{self._company_id}/entities/suppliers",
             params=params,
         )
         response.raise_for_status()
@@ -111,9 +111,13 @@ class FICClient:
         return FICExpenseResponse(**data.get("data", {}))
 
     async def health(self) -> bool:
-        """Verifica connettività con FIC API."""
+        """Verifica connettività con FIC API.
+
+        Usa /user/info (non richiede company_id) per testare
+        l'autenticazione senza necessità di permessi specifici.
+        """
         try:
-            r = await self._client.get("/c/" + self._company_id + "/entities", timeout=10.0)
+            r = await self._client.get("/user/info", timeout=10.0)
             return r.status_code == 200
         except httpx.HTTPError:
             return False
