@@ -172,6 +172,24 @@ def _mock_fic_transport() -> httpx.MockTransport:
                 },
             )
 
+        # Upload attachment to received document
+        if (
+            "/received_documents/" in request.url.path
+            and request.url.path.endswith("/attachment")
+            and request.method == "POST"
+        ):
+            # Estrai document_id dal path
+            return httpx.Response(
+                201,
+                json={
+                    "data": {
+                        "id": 999,
+                        "filename": "allegato.pdf",
+                        "url": "https://mock.fic.test/attachment/999",
+                    },
+                },
+            )
+
         return httpx.Response(404)
 
     return httpx.MockTransport(handler)
@@ -387,3 +405,30 @@ async def test_fic_error(
     assert result.status == DocumentStatus.FAILED
     assert result.fic_status == "supplier_error"
     assert result.fic_error is not None
+
+
+async def test_pipeline_with_attachment(
+    mock_factum: FactumClient,
+    mock_fic: FICClient,
+    mapper: Mapper,
+    queue: QueueStore,
+    mock_settings: Settings,
+    tmp_path: Path,
+) -> None:
+    """File PDF → Factum OK → FIC expense creato + allegato caricato."""
+    # Crea un finto PDF (solo contenuto testuale)
+    pdf_path = tmp_path / "test_invoice.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test invoice content digitalocean inc.")
+
+    result = await process_file(
+        pdf_path,
+        factum=mock_factum,
+        fic=mock_fic,
+        mapper=mapper,
+        queue=queue,
+        settings=mock_settings,
+    )
+
+    assert result.status == DocumentStatus.RECORDED
+    assert result.fic_id == 12345
+    assert result.factum_status == "done"

@@ -28,6 +28,10 @@ from factum_fic.storage.queue import QueueStore
 logger = logging.getLogger(__name__)
 
 
+# Estensioni supportate per l'upload allegati PDF/immagine
+_ATTACHMENT_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".webp"}
+
+
 def _extract_text(path: Path) -> tuple[str, str]:
     """Estrae il contenuto testuale da un file.
 
@@ -162,6 +166,19 @@ async def process_file(
     # Crea spesa/autofattura su FIC
     try:
         fic_resp = await fic.create_expense(expense)
+
+        # Upload allegato (PDF/immagine) se il file è in formato supportato
+        if path.suffix.lower() in _ATTACHMENT_EXTENSIONS:
+            try:
+                _ = await fic.upload_received_document_attachment(fic_resp.id, path)
+                logger.info("Allegato caricato su FIC per documento id=%d", fic_resp.id)
+            except Exception as exc:
+                logger.warning(
+                    "Upload allegato fallito per documento id=%d: %s — la registrazione contabile rimane valida",
+                    fic_resp.id,
+                    exc,
+                )
+
         queue.complete(sha, fic_resp.id)
         logger.info("Registrato su FIC: id=%d, tipo=%s", fic_resp.id, fic_resp.type)
         return PipelineResult(

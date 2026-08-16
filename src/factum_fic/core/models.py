@@ -140,6 +140,7 @@ class FICCreateExpenseRequest(BaseModel):
     entity_id: int | None = None
     entity: FICCreateSupplierRequest | None = None
     date: str = ""
+    due_date: str = ""
     category: str = "Altri costi"
     description: str = ""
     amount_net: float = 0.0

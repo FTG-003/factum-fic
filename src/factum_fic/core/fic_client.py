@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -119,7 +121,7 @@ class FICClient:
             "payments_list": [
                 {
                     "amount": expense.amount_gross or expense.amount_net,
-                    "due_date": expense.date or "2026-01-01",
+                    "due_date": expense.due_date or expense.date or datetime.date.today().isoformat(),
                     "status": "not_paid",
                 }
             ],
@@ -135,6 +137,58 @@ class FICClient:
         response.raise_for_status()
         data = response.json()
         return FICExpenseResponse(**data.get("data", {}))
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True,
+    )
+    async def upload_received_document_attachment(
+        self,
+        document_id: int,
+        file_path: str | Path,
+    ) -> dict[str, Any]:
+        """Carica un allegato (PDF/immagine) a un documento di spesa su FIC.
+
+        Args:
+            document_id: ID del documento ricevuto (da create_expense).
+            file_path: Percorso del file da allegare (PDF, PNG, JPG, TIFF).
+
+        Returns:
+            Risposta JSON da FIC.
+
+        Raises:
+            httpx.HTTPStatusError: Se FIC rifiuta l'upload.
+            FileNotFoundError: Se il file non esiste.
+        """
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"File allegato non trovato: {path}")
+
+        # FIC v2 accetta multipart/form-data con campo "attachment"
+        # Il Content-Type dell'allegato è dedotto dall'estensione
+        suffix = path.suffix.lower()
+        media_type_map = {
+            ".pdf": "application/pdf",
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".tiff": "image/tiff",
+            ".tif": "image/tiff",
+        }
+        media_type = media_type_map.get(suffix, "application/octet-stream")
+
+        # Costruisce la richiesta multipart senza Content-Type globale
+        # (httpx lo imposta automaticamente con il boundary)
+        content = path.read_bytes()
+        files = {"attachment": (path.name, content, media_type)}
+
+        response = await self._client.post(
+            f"/c/{self._company_id}/received_documents/{document_id}/attachment",
+            files=files,
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def health(self) -> bool:
         """Verifica connettività con FIC API.

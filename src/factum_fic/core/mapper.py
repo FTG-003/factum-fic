@@ -8,6 +8,7 @@ Regole di business per determinare:
 
 from __future__ import annotations
 
+import datetime
 from typing import Any
 
 from factum_fic.core.models import (
@@ -124,12 +125,36 @@ class Mapper:
         currency = (result.currency or "EUR").upper()
         gross = result.total if result.total else 0.0
 
+        # ── Fallback date: garantisce data ISO valida ────────────────────
+        raw_date = (result.invoice_date or "").strip()
+        if raw_date:
+            # Verifica formato ISO YYYY-MM-DD
+            try:
+                datetime.datetime.strptime(raw_date, "%Y-%m-%d")
+                issue_date = raw_date
+            except ValueError:
+                issue_date = datetime.date.today().isoformat()
+        else:
+            issue_date = datetime.date.today().isoformat()
+
+        # Due date: usa issue_date come fallback
+        due_date = issue_date
+
+        # ── Sanitizzazione importi ───────────────────────────────────────
+        # Se amount_gross è 0 ma c'è un totale, allinea netto
+        if gross == 0.0 and result.total is not None and result.total > 0:
+            gross = result.total
+        # Se amount_gross è 0 e amount_net pure, non impostabile
+        net = gross
+        vat = 0.0
+        final_gross = net + vat
+
         # Descrizione: includi numero fattura e fornitore
         desc_parts = [result.supplier_name or "Fattura"]
         if result.invoice_number:
             desc_parts.append(f"n. {result.invoice_number}")
-        if result.invoice_date:
-            desc_parts.append(f"del {result.invoice_date}")
+        if issue_date:
+            desc_parts.append(f"del {issue_date}")
         description = " — ".join(desc_parts)
 
         # Note legali per autofattura
@@ -144,12 +169,13 @@ class Mapper:
         return FICCreateExpenseRequest(
             entity_id=entity_id,
             entity=supplier,
-            date=result.invoice_date or "",
+            date=issue_date,
+            due_date=due_date,
             category=category,
             description=description,
-            amount_net=gross,
-            amount_vat=0.0,
-            amount_gross=gross,
+            amount_net=net,
+            amount_vat=vat,
+            amount_gross=final_gross,
             currency=currency,
             vat_percentage=0.0,
             has_iva=currency == "EUR",

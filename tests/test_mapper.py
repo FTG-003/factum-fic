@@ -83,3 +83,62 @@ def test_mapper_with_custom_yaml() -> None:
     result = FactumParseResult(supplier_name="Stripe Payments UK Ltd")
     assert m.categorize(result) == "Commissioni pagamento"
     assert m.account_for("Commissioni pagamento") == "Commissioni"
+
+
+def test_build_expense_date_fallback_empty(mapper: Mapper) -> None:
+    """Data fattura vuota → fallback a oggi."""
+    result = FactumParseResult(
+        document_type="invoice",
+        currency="EUR",
+        total=100.0,
+        supplier_name="Test Srl",
+        supplier_vat="IT01234567890",
+        supplier_country="IT",
+        invoice_date="",
+        invoice_number="",
+    )
+    expense = mapper.build_expense(result)
+    # Deve contenere la data odierna YYYY-MM-DD
+    assert len(expense.date) == 10
+    assert expense.date[4] == "-"
+    assert expense.date[7] == "-"
+    # due_date deve matchare issue_date
+    assert expense.due_date == expense.date
+
+
+def test_build_expense_date_fallback_invalid(mapper: Mapper) -> None:
+    """Data fattura in formato non valido → fallback a oggi."""
+    result = FactumParseResult(
+        document_type="invoice",
+        currency="EUR",
+        total=50.0,
+        supplier_name="Test Ltd",
+        supplier_vat="",
+        supplier_country="US",
+        invoice_date="31/12/2026",  # formato non ISO
+        invoice_number="INV-001",
+    )
+    expense = mapper.build_expense(result)
+    assert len(expense.date) == 10
+    assert expense.date[4] == "-"
+    assert expense.date[7] == "-"
+    assert expense.is_autofattura is True
+    assert expense.due_date == expense.date
+
+
+def test_build_expense_amount_sanitization(mapper: Mapper) -> None:
+    """Importo zero con total > 0 → allineato."""
+    result = FactumParseResult(
+        document_type="invoice",
+        currency="USD",
+        total=250.00,
+        supplier_name="AWS Inc.",
+        supplier_vat="",
+        supplier_country="US",
+        invoice_date="2026-09-01",
+        invoice_number="AWS-2026-091",
+    )
+    expense = mapper.build_expense(result)
+    assert expense.amount_net == 250.00
+    assert expense.amount_gross == 250.00
+    assert expense.date == "2026-09-01"
