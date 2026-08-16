@@ -166,7 +166,7 @@ def _mock_fic_transport() -> httpx.MockTransport:
                 json={
                     "data": {
                         "id": 12345,
-                        "type": body.get("type", "expense"),
+                        "type": body.get("data", {}).get("type", "expense"),
                         "status": "confirmed",
                     },
                 },

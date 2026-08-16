@@ -51,7 +51,7 @@ class FICClient:
         Returns:
             Risposta JSON da FIC con i dati dell'entity creata.
         """
-        payload = supplier.model_dump(exclude_none=True)
+        payload = {"data": supplier.model_dump(exclude_none=True)}
         response = await self._client.post(
             f"/c/{self._company_id}/entities/suppliers",
             json=payload,
@@ -64,9 +64,7 @@ class FICClient:
         wait=wait_exponential(multiplier=1, min=1, max=10),
         reraise=True,
     )
-    async def search_supplier(
-        self, name: str, vat_number: str | None = None
-    ) -> dict[str, Any] | None:
+    async def search_supplier(self, name: str, vat_number: str | None = None) -> dict[str, Any] | None:
         """Cerca un fornitore esistente per nome o partita IVA.
 
         Returns:
@@ -90,9 +88,7 @@ class FICClient:
         wait=wait_exponential(multiplier=1, min=1, max=10),
         reraise=True,
     )
-    async def create_expense(
-        self, expense: FICCreateExpenseRequest
-    ) -> FICExpenseResponse:
+    async def create_expense(self, expense: FICCreateExpenseRequest) -> FICExpenseResponse:
         """Crea un documento di spesa (o bozza autofattura) su FIC.
 
         Args:
@@ -101,7 +97,37 @@ class FICClient:
         Returns:
             FICExpenseResponse con id e stato del documento creato.
         """
-        payload = expense.model_dump(exclude_none=True)
+        # Costruisce il payload nel formato atteso da FIC v2
+        fic_payload: dict[str, Any] = {
+            "type": "self_invoice" if expense.is_autofattura else "expense",
+            "entity": {"id": expense.entity_id}
+            if expense.entity_id
+            else expense.entity.model_dump(exclude_none=True)
+            if expense.entity
+            else None,  # type: ignore[union-attr]
+            "date": expense.date,
+            "category": expense.category,
+            "description": expense.description,
+            "amount_net": expense.amount_net,
+            "amount_vat": expense.amount_vat,
+            "amount_gross": expense.amount_gross or expense.amount_net,
+            "currency": {
+                "id": expense.currency,
+                "exchange_rate": 1.08 if expense.currency == "USD" else 0.86 if expense.currency == "GBP" else 1.0,
+            },
+            "has_iva": expense.has_iva,
+            "payments_list": [
+                {
+                    "amount": expense.amount_gross or expense.amount_net,
+                    "due_date": expense.date or "2026-01-01",
+                    "status": "not_paid",
+                }
+            ],
+        }
+        if expense.notes:
+            fic_payload["notes"] = expense.notes
+
+        payload = {"data": fic_payload}
         response = await self._client.post(
             f"/c/{self._company_id}/received_documents",
             json=payload,
