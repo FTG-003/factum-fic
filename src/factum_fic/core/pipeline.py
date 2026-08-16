@@ -74,7 +74,7 @@ def move_to_processed(path: Path, settings: Settings) -> Path:
     """
     dest = _archive_path(settings, "processed_dir", path)
     shutil.move(str(path), str(dest))
-    logger.info("File archiviato in processed: %s → %s", path.name, dest)
+    logger.info("✅ File elaborato e archiviato in: %s", dest)
     return dest
 
 
@@ -86,7 +86,7 @@ def move_to_failed(path: Path, settings: Settings) -> Path:
     """
     dest = _archive_path(settings, "failed_dir", path)
     shutil.move(str(path), str(dest))
-    logger.warning("File spostato in failed: %s → %s", path.name, dest)
+    logger.warning("❌ Errore elaborazione, spostato in: %s", dest)
     return dest
 
 

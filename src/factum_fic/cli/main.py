@@ -104,10 +104,10 @@ def process_inbox(
     )
 
     if not files:
-        print_info(f"Nessun file da processare in {inbox}")
+        print_info(f"📂 Nessun file da processare in {inbox}")
         return
 
-    print_info(f"Trovati {len(files)} file in {inbox}")
+    print_info(f"📂 Trovati {len(files)} file in {inbox}")
 
     async def _run() -> None:
         factum = FactumClient(settings)
@@ -116,7 +116,7 @@ def process_inbox(
 
         try:
             for path in files:
-                print_info(f"Elaborazione: {path.name}")
+                print_info(f"📄 Elaborazione: {path.name}")
                 try:
                     result = await process_file(
                         path,
@@ -128,7 +128,7 @@ def process_inbox(
                     )
                     results.append(result)
                 except Exception as e:
-                    print_error(f"Errore durante elaborazione {path.name}: {e}")
+                    print_error(f"❌ Errore durante elaborazione {path.name}: {e}")
             if results:
                 print_result_table(results)
         finally:
@@ -170,7 +170,7 @@ def watch(
     ensure_dirs(settings)
 
     async def _on_file(path: Path) -> None:
-        print_info(f"Elaborazione: {path.name}")
+        print_info(f"📂 Elaborazione in corso: {path.name}")
         try:
             result = await process_file(
                 path,
@@ -182,12 +182,12 @@ def watch(
             )
             print_result_table([result])
         except Exception as e:
-            print_error(f"Errore: {e}")
+            print_error(f"❌ Errore: {e}")
 
     daemon = WatcherDaemon(settings, lambda p: asyncio.run(_on_file(p)))
 
     try:
-        print_info(f"Watcher avviato su: {daemon.watch_dir}")
+        print_info(f"📂 Monitoraggio avviato su: {daemon.watch_dir}")
         print_info("Premi Ctrl+C per arrestare.")
         daemon.start()
         while True:
