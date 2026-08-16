@@ -8,6 +8,7 @@ di tutti i percorsi (successo, errori, deduplicazione).
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import httpx
@@ -253,10 +254,12 @@ async def test_pipeline_saas_estero(
     mapper: Mapper,
     queue: QueueStore,
     mock_settings: Settings,
+    tmp_path: Path,
 ) -> None:
     """File SaaS USA → Factum OK → autofattura TD17 → FIC expense creato."""
-    path = _FIXTURES / "sample_saas_invoice.txt"
-    assert path.exists(), f"Fixture non trovata: {path}"
+    src = _FIXTURES / "sample_saas_invoice.txt"
+    path = tmp_path / "sample_saas_invoice.txt"
+    shutil.copy2(src, path)
 
     result = await process_file(
         path,
@@ -294,10 +297,12 @@ async def test_pipeline_italiano(
     mapper: Mapper,
     queue: QueueStore,
     mock_settings: Settings,
+    tmp_path: Path,
 ) -> None:
     """File fattura italiana → Factum OK → spesa diretta → FIC."""
-    path = _FIXTURES / "sample_italian_invoice.txt"
-    assert path.exists()
+    src = _FIXTURES / "sample_italian_invoice.txt"
+    path = tmp_path / "sample_italian_invoice.txt"
+    shutil.copy2(src, path)
 
     result = await process_file(
         path,
@@ -323,13 +328,19 @@ async def test_deduplicazione(
     mapper: Mapper,
     queue: QueueStore,
     mock_settings: Settings,
+    tmp_path: Path,
 ) -> None:
     """Stesso file due volte → secondo giro SKIPPED."""
-    path = _FIXTURES / "sample_saas_invoice.txt"
+    src = _FIXTURES / "sample_saas_invoice.txt"
+    path1 = tmp_path / "sample_saas_invoice.txt"
+    shutil.copy2(src, path1)
+    # Seconda copia (stesso contenuto = stesso SHA-256)
+    path2 = tmp_path / "sample_saas_invoice_again.txt"
+    shutil.copy2(src, path2)
 
     # Prima volta: processato
     result1 = await process_file(
-        path,
+        path1,
         factum=mock_factum,
         fic=mock_fic,
         mapper=mapper,
@@ -338,9 +349,9 @@ async def test_deduplicazione(
     )
     assert result1.status == DocumentStatus.RECORDED
 
-    # Seconda volta: SKIPPED (deduplicazione)
+    # Seconda volta (copia separata): SKIPPED (deduplicazione via SHA-256)
     result2 = await process_file(
-        path,
+        path2,
         factum=mock_factum,
         fic=mock_fic,
         mapper=mapper,
@@ -387,13 +398,16 @@ async def test_fic_error(
     mapper: Mapper,
     queue: QueueStore,
     mock_settings: Settings,
+    tmp_path: Path,
 ) -> None:
     """FIC non raggiungibile → FAILED con fic_status=supplier_error."""
     # FIC client SENZA transport (connessione rifiutata)
     broken_fic = FICClient(mock_settings)
     # Non assegniamo transport → connessione reale fallirà
 
-    path = _FIXTURES / "sample_saas_invoice.txt"
+    src = _FIXTURES / "sample_saas_invoice.txt"
+    path = tmp_path / "sample_saas_invoice.txt"
+    shutil.copy2(src, path)
     result = await process_file(
         path,
         factum=mock_factum,

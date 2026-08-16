@@ -11,6 +11,7 @@ import typer
 from factum_fic import __version__
 from factum_fic.cli.ui import console, print_error, print_info, print_result_table
 from factum_fic.config import load_settings, load_yaml_config
+from factum_fic.core.pipeline import ensure_dirs
 
 app = typer.Typer(
     name="factum-fic",
@@ -32,6 +33,9 @@ def _main(
 ) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(level=level, format="%(levelname)s  %(message)s")
+    # Assicura che le directory inbox/processed/failed esistano
+    settings = load_settings()
+    ensure_dirs(settings)
 
 
 @app.command()
@@ -50,6 +54,8 @@ def process(
     yaml_cfg = load_yaml_config(Path(config_file) if config_file else settings.config_file)
     mapper = Mapper(yaml_cfg)
     queue = QueueStore()
+
+    ensure_dirs(settings)
 
     async def _run() -> None:
         factum = FactumClient(settings)
@@ -73,10 +79,71 @@ def process(
 
 
 @app.command()
+def process_inbox(
+    config_file: str = typer.Option("", "--config", "-c", help="Percorso YAML categorie"),
+) -> None:
+    """Processa in sequenza tutti i file presenti in inbox/."""
+    from factum_fic.core.factum_client import FactumClient
+    from factum_fic.core.fic_client import FICClient
+    from factum_fic.core.mapper import Mapper
+    from factum_fic.core.pipeline import process_file
+    from factum_fic.storage.queue import QueueStore
+
+    settings = load_settings()
+    yaml_cfg = load_yaml_config(Path(config_file) if config_file else settings.config_file)
+    mapper = Mapper(yaml_cfg)
+    queue = QueueStore()
+    ensure_dirs(settings)
+
+    inbox = Path(settings.inbox_dir).expanduser().resolve()
+    files = sorted(
+        p for p in inbox.iterdir()
+        if p.is_file()
+        and p.suffix.lower() in {".pdf", ".xml", ".txt", ".csv", ".png", ".jpg", ".jpeg"}
+        and p.suffix.lower() not in {".tmp", ".crdownload"}
+    )
+
+    if not files:
+        print_info(f"Nessun file da processare in {inbox}")
+        return
+
+    print_info(f"Trovati {len(files)} file in {inbox}")
+
+    async def _run() -> None:
+        factum = FactumClient(settings)
+        fic = FICClient(settings)
+        results: list[PipelineResult] = []  # type: ignore[annotation-unchecked]
+
+        try:
+            for path in files:
+                print_info(f"Elaborazione: {path.name}")
+                try:
+                    result = await process_file(
+                        path,
+                        factum=factum,
+                        fic=fic,
+                        mapper=mapper,
+                        queue=queue,
+                        settings=settings,
+                    )
+                    results.append(result)
+                except Exception as e:
+                    print_error(f"Errore durante elaborazione {path.name}: {e}")
+            if results:
+                print_result_table(results)
+        finally:
+            await factum.close()
+            await fic.close()
+            queue.close()
+
+    asyncio.run(_run())
+
+
+@app.command()
 def watch(
     directory: str = typer.Argument(
         default="",
-        help="Directory da monitorare (default: WATCH_DIR da .env)",
+        help="Directory da monitorare (default: INBOX_DIR da .env)",
     ),
     config_file: str = typer.Option("", "--config", "-c", help="Percorso YAML categorie"),
 ) -> None:
@@ -89,11 +156,18 @@ def watch(
     from factum_fic.watcher.daemon import WatcherDaemon
 
     settings = load_settings()
+    # Se non è specificata una directory, usa inbox_dir
+    if directory:
+        settings.watch_dir = directory
+    else:
+        settings.watch_dir = settings.inbox_dir
     yaml_cfg = load_yaml_config(Path(config_file) if config_file else settings.config_file)
     mapper = Mapper(yaml_cfg)
     queue = QueueStore()
     factum = FactumClient(settings)
     fic = FICClient(settings)
+
+    ensure_dirs(settings)
 
     async def _on_file(path: Path) -> None:
         print_info(f"Elaborazione: {path.name}")

@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     fic_api_key: str = Field(default="", alias="FIC_API_KEY")
     fic_company_id: str = Field(default="", alias="FIC_COMPANY_ID")
 
+    # Directory gestione fatture
+    inbox_dir: str = Field(default="~/Fatture/inbox", alias="INBOX_DIR")
+    processed_dir: str = Field(default="~/Fatture/processed", alias="PROCESSED_DIR")
+    failed_dir: str = Field(default="~/Fatture/failed", alias="FAILED_DIR")
+
     # Watcher
     watch_dir: str = Field(default="~/Downloads", alias="WATCH_DIR")
 

@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import shutil
 from pathlib import Path
 
 import pytest
 
 from factum_fic.config import Settings
 from factum_fic.watcher.daemon import WatcherDaemon
-
-_FIXTURES = Path(__file__).parent / "fixtures"
-
 
 @pytest.fixture
 def watch_dir(tmp_path: Path) -> Path:
@@ -54,9 +50,8 @@ async def test_watcher_rileva_file(
     daemon.start()
 
     # Simula un nuovo file nella cartella
-    src = _FIXTURES / "sample_saas_invoice.txt"
     dst = Path(mock_settings_for_watcher.watch_dir) / "test_invoice.txt"
-    shutil.copy2(src, dst)
+    dst.write_text("contenuto test fattura digitalocean inc. 59.00 USD")
 
     # Aspetta che watchdog rilevi
     await asyncio.sleep(1.5)
