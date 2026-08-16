@@ -123,10 +123,51 @@ class Mapper:
         doc_type = self.detect_document_type(result)
         category = self.categorize(result)
         currency = (result.currency or "EUR").upper()
-        gross = result.total if result.total else 0.0
 
-        # ── Fallback date: garantisce data ISO valida ────────────────────
+        # ── Importi: cerca in result.raw se total è 0 ────────────────────
+        gross = result.total or 0.0
+        net = 0.0
+        vat = 0.0
+
+        # Se Factum non ha popolato total, prova dal raw nested
+        if gross == 0.0 and result.raw:
+            raw = result.raw
+            # Alcune API nidificano in "amount" o "totals"
+            for key in ("amount_gross", "gross_amount", "total_amount", "total", "importo"):
+                val = raw.get(key) or 0.0
+                if val:
+                    gross = float(val)
+                    break
+            # Cerca anche amount_net / amount_vat
+            for key in ("amount_net", "net_amount", "imponibile"):
+                val = raw.get(key) or 0.0
+                if val:
+                    net = float(val)
+                    break
+            for key in ("amount_vat", "vat_amount", "iva"):
+                val = raw.get(key) or 0.0
+                if val:
+                    vat = float(val)
+                    break
+
+        # Se ancora gross=0, usa net+vat o somma items
+        if gross == 0.0 and not net and not vat:
+            for item in result.items:
+                gross += float(item.get("amount", 0.0))
+
+        # Fallback finale: net = gross, vat = 0
+        if not net:
+            net = gross
+        if not vat:
+            vat = 0.0
+        final_gross = gross or (net + vat)
         raw_date = (result.invoice_date or "").strip()
+        if not raw_date and result.raw:
+            for key in ("date", "invoice_date", "document_date", "data"):
+                val = result.raw.get(key, "")
+                if val:
+                    raw_date = str(val).strip()[:10]
+                    break
         if raw_date:
             # Verifica formato ISO YYYY-MM-DD
             try:
@@ -139,15 +180,6 @@ class Mapper:
 
         # Due date: usa issue_date come fallback
         due_date = issue_date
-
-        # ── Sanitizzazione importi ───────────────────────────────────────
-        # Se amount_gross è 0 ma c'è un totale, allinea netto
-        if gross == 0.0 and result.total is not None and result.total > 0:
-            gross = result.total
-        # Se amount_gross è 0 e amount_net pure, non impostabile
-        net = gross
-        vat = 0.0
-        final_gross = net + vat
 
         # Descrizione: includi numero fattura e fornitore
         desc_parts = [result.supplier_name or "Fattura"]

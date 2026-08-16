@@ -102,29 +102,18 @@ class FICClient:
         # Costruisce il payload nel formato atteso da FIC v2
         fic_payload: dict[str, Any] = {
             "type": "self_invoice" if expense.is_autofattura else "expense",
+            "description": expense.description or "Acquisto servizi / SaaS",
             "entity": {"id": expense.entity_id}
             if expense.entity_id
             else expense.entity.model_dump(exclude_none=True)
             if expense.entity
-            else None,  # type: ignore[union-attr]
-            "date": expense.date,
-            "category": expense.category,
-            "description": expense.description,
+            else {"name": "Fornitore sconosciuto"},
+            "date": expense.date or datetime.date.today().isoformat(),
+            "category": expense.category or "Altri costi",
             "amount_net": expense.amount_net,
             "amount_vat": expense.amount_vat,
-            "amount_gross": expense.amount_gross or expense.amount_net,
-            "currency": {
-                "id": expense.currency,
-                "exchange_rate": 1.08 if expense.currency == "USD" else 0.86 if expense.currency == "GBP" else 1.0,
-            },
-            "has_iva": expense.has_iva,
-            "payments_list": [
-                {
-                    "amount": expense.amount_gross or expense.amount_net,
-                    "due_date": expense.due_date or expense.date or datetime.date.today().isoformat(),
-                    "status": "not_paid",
-                }
-            ],
+            "amount_gross": expense.amount_gross if expense.amount_gross is not None else expense.amount_net,
+            "rc_center": "",
         }
         if expense.notes:
             fic_payload["notes"] = expense.notes

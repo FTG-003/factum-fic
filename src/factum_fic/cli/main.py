@@ -81,6 +81,7 @@ def process(
 @app.command()
 def process_inbox(
     config_file: str = typer.Option("", "--config", "-c", help="Percorso YAML categorie"),
+    force: bool = typer.Option(False, "--force", "-f", help="Ignora deduplicazione e riprocessa"),
 ) -> None:
     """Processa in sequenza tutti i file presenti in inbox/."""
     from factum_fic.core.factum_client import FactumClient
@@ -107,7 +108,10 @@ def process_inbox(
         print_info(f"📂 Nessun file da processare in {inbox}")
         return
 
-    print_info(f"📂 Trovati {len(files)} file in {inbox}")
+    if force:
+        print_info(f"⚡ Modalità force: deduplicazione disabilitata per {len(files)} file")
+    else:
+        print_info(f"📂 Trovati {len(files)} file in {inbox}")
 
     async def _run() -> None:
         factum = FactumClient(settings)
@@ -125,6 +129,7 @@ def process_inbox(
                         mapper=mapper,
                         queue=queue,
                         settings=settings,
+                        force=force,
                     )
                     results.append(result)
                 except Exception as e:

@@ -45,15 +45,23 @@ class QueueStore:
         self._conn.commit()
 
     def exists(self, sha256: str) -> bool:
-        """Verifica se un file (per hash) è già stato processato."""
+        """Verifica se un file (per hash) è già stato processato con successo.
+
+        Solo gli item con status='completed' contano: i tentativi falliti
+        (queued/failed) NON bloccano un nuovo tentativo.
+        """
         cur = self._conn.execute(
-            "SELECT 1 FROM queue WHERE sha256 = ?",
+            "SELECT 1 FROM queue WHERE sha256 = ? AND status = 'completed'",
             (sha256,),
         )
         return cur.fetchone() is not None
 
     def enqueue(self, sha256: str, path: str) -> None:
-        """Inserisce un file in coda (idempotente)."""
+        """Inserisce un file in coda (idempotente).
+
+        Deprecato: la coda ora registra solo i file completati.
+        Mantenuto per compatibilità con test esistenti.
+        """
         self._conn.execute(
             "INSERT OR IGNORE INTO queue (sha256, path, status) VALUES (?, ?, 'queued')",
             (sha256, path),
@@ -61,21 +69,39 @@ class QueueStore:
         self._conn.commit()
 
     def complete(self, sha256: str, fic_id: int | None = None) -> None:
-        """Marca un item come completato."""
+        """Registra un file come COMPLETATO (solo dopo successo FIC).
+
+        Inserisce o aggiorna la riga con status='completed'.
+        """
         self._conn.execute(
-            "UPDATE queue SET status = 'completed', fic_id = ?, updated_at = datetime('now') "
-            "WHERE sha256 = ?",
-            (fic_id, sha256),
+            "INSERT INTO queue (sha256, path, status, fic_id, created_at, updated_at) "
+            "VALUES (?, ?, 'completed', ?, datetime('now'), datetime('now')) "
+            "ON CONFLICT(sha256) DO UPDATE SET "
+            "status='completed', fic_id=excluded.fic_id, updated_at=datetime('now')",
+            (sha256, "", fic_id),
         )
         self._conn.commit()
 
     def mark_failed(self, sha256: str) -> None:
-        """Marca un item come fallito."""
+        """Marca un item come fallito (e lo rende riprocessabile)."""
         self._conn.execute(
             "UPDATE queue SET status = 'failed', updated_at = datetime('now') "
             "WHERE sha256 = ?",
             (sha256,),
         )
+        self._conn.commit()
+
+    def remove(self, sha256: str) -> None:
+        """Rimuove completamente un item dalla coda (per retry pulito)."""
+        self._conn.execute(
+            "DELETE FROM queue WHERE sha256 = ?",
+            (sha256,),
+        )
+        self._conn.commit()
+
+    def reset(self) -> None:
+        """Svuota completamente la tabella coda."""
+        self._conn.execute("DELETE FROM queue")
         self._conn.commit()
 
     def pending(self) -> list[tuple[str, str]]:

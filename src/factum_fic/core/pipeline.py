@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import json
 import logging
 import shutil
 from pathlib import Path
@@ -112,6 +113,7 @@ async def process_file(
     mapper: Mapper,
     queue: QueueStore,
     settings: Settings,
+    force: bool = False,
 ) -> PipelineResult:
     """Processa un singolo file: Factum → Mapper → FIC.
 
@@ -137,8 +139,8 @@ async def process_file(
         size_bytes=path.stat().st_size,
     )
 
-    # Deduplicazione
-    if queue.exists(sha):
+    # Deduplicazione — solo i completati bloccano
+    if not force and queue.exists(sha):
         logger.info("File già processato (SHA-256 match): %s", path.name)
         result = PipelineResult(
             file=file_event,
@@ -152,7 +154,11 @@ async def process_file(
             logger.warning("Fallito spostamento duplicato: %s", exc)
         return result
 
-    queue.enqueue(sha, str(path))
+    if not force:
+        queue.enqueue(sha, str(path))
+    else:
+        # In modalità force, pulisci eventuali record pregressi
+        queue.remove(sha)
 
     # Estrai testo tramite estrattore locale
     try:
@@ -200,6 +206,9 @@ async def process_file(
             logger.warning("Fallito spostamento errore: %s", exc)
         return result
 
+    # Debug: Factum raw
+    logger.info("FACTUM RAW: %s", json.dumps(factum_resp.model_dump(mode='json'), indent=2, ensure_ascii=False))
+
     # Mappatura
     result = factum_resp.result
     doc_type_detected = mapper.detect_document_type(result)
@@ -235,6 +244,14 @@ async def process_file(
 
     # Crea spesa/autofattura su FIC
     try:
+        # Debug: FIC payload
+        fic_payload_debug = expense.model_dump(mode='json', exclude={'entity'})
+        if expense.entity:
+            fic_payload_debug['entity'] = expense.entity.model_dump(exclude_none=True)
+        if expense.entity_id:
+            fic_payload_debug['entity'] = {'id': expense.entity_id, 'name': supplier.name}
+        logger.info("FIC PAYLOAD: %s", json.dumps(fic_payload_debug, indent=2, ensure_ascii=False))
+
         fic_resp = await fic.create_expense(expense)
 
         # Upload allegato (PDF/immagine) se il file è in formato supportato
