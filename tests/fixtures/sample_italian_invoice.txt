@@ -1,0 +1,19 @@
+FATTURA — ARUBA S.P.A.
+
+Fornitore: Aruba S.p.A.
+Indirizzo: Via San Clemente, 53, 24036 Ponte San Pietro BG
+Partita IVA: IT01573850516
+Codice Fiscale: 01573850516
+Data fattura: 2026-08-15
+Numero fattura: 2026/FP/001234
+
+DESCRIZIONE                             Q.tà    Prezzo      Importo
+Server dedicato Atom C2750              1       960.00 EUR   960.00 EUR
+Backup automatico 500GB                 1       240.00 EUR   240.00 EUR
+
+Imponibile:                                        1,200.00 EUR
+IVA 22%:                                             264.00 EUR
+TOTALE FATTURA:                                    1,464.00 EUR
+
+Pagamento: Bonifico bancario IBAN IT12X1234512345123456789012
+Scadenza: 2026-09-14

@@ -56,19 +56,22 @@ class WatcherDaemon:
     ) -> None:
         self._watch_dir = Path(settings.watch_dir).expanduser().resolve()
         self._watch_dir.mkdir(parents=True, exist_ok=True)
-        self._observer = Observer()
         self._handler = FactumFICHandler(callback)
+        self._observer: Observer | None = None
 
     def start(self) -> None:
         """Avvia l'osservazione della cartella."""
+        self._observer = Observer()
         self._observer.schedule(self._handler, str(self._watch_dir), recursive=False)
         self._observer.start()
         logger.info("Watcher avviato su: %s", self._watch_dir)
 
     def stop(self) -> None:
         """Arresta l'osservazione."""
-        self._observer.stop()
-        self._observer.join()
+        if self._observer is not None:
+            self._observer.stop()
+            self._observer.join()
+            self._observer = None
         logger.info("Watcher arrestato.")
 
     @property

@@ -1,0 +1,21 @@
+FATTURA SaaS — DIGITALOCEAN INC.
+
+Fornitore: DigitalOcean Inc.
+Indirizzo: 101 Avenue of the Americas, New York, NY 10013, USA
+Partita IVA: n/a (fornitore extra-UE)
+Data fattura: 2026-08-01
+Numero fattura: INV-2026-08101
+
+DESCRIZIONE                        Q.tà    Prezzo     Importo
+Droplet Basic Plan (srv-web-01)     1       12.00 USD   12.00 USD
+Droplet Basic Plan (srv-api-01)     1       12.00 USD   12.00 USD
+Managed Database (pg-s1-01)         1       15.00 USD   15.00 USD
+Spazio disco aggiuntivo (100GB)     1       10.00 USD   10.00 USD
+Load Balancer (lb-01)               1       10.00 USD   10.00 USD
+
+Subtotale:                                   59.00 USD
+TOTALE DOVUTO:                               59.00 USD
+
+Pagamento: Carta di credito VISA ****4242
+Periodo di fatturazione: 01/07/2026 — 31/07/2026
+Valuta: USD (cambio EUR/USD: 1.08)
