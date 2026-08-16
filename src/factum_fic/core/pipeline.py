@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import shutil
+from typing import Any
 from pathlib import Path
 
 from factum_fic.config import Settings
@@ -101,6 +102,65 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _enrich_from_payload(factum_resp: "FactumResponse") -> None:
+    """Arricchisce FactumParseResult da payload.content (envelope v2)."""
+    result = factum_resp.result
+    if result is None:
+        return
+    # payload.content è dentro model_extra di result (FactumParseResult)
+    # perché l'API restituisce result.payload.content.*
+    extra = getattr(result, "model_extra", {}) or {}
+    payload = extra.get("payload")
+    if not isinstance(payload, dict):
+        return
+    content: dict[str, Any] = payload.get("content", {}) or {}
+    if not content:
+        return
+
+    # Importi — tenta parsing da raw_extracted se importi è null
+    importi: dict[str, Any] = content.get("importi", {}) or {}
+    if result.total == 0.0 and importi.get("totale_documento"):
+        result.total = float(importi["totale_documento"])
+    elif result.total == 0.0:
+        # Fallback: cerca amount in raw_extracted (es. "€ 15.69")
+        raw_extracted = content.get("raw_extracted") or {}
+        if isinstance(raw_extracted, dict):
+            for key in ("total_excl_vat", "total", "totale", "totale_documento", "importo_totale"):
+                val = raw_extracted.get(key) or ""
+                if isinstance(val, str) and val:
+                    try:
+                        import re
+                        nums = re.findall(r"[\d]+[.,][\d]+", val.replace("€", "").replace("\u20ac", ""))
+                        if nums:
+                            result.total = float(nums[0].replace(",", "."))
+                            break
+                    except (ValueError, IndexError):
+                        continue
+                elif isinstance(val, (int, float)) and val:
+                    result.total = float(val)
+                    break
+    # Emittente
+    if not result.supplier_name:
+        emittente: dict[str, Any] = content.get("emittente", {}) or {}
+        result.supplier_name = emittente.get("ragione_sociale") or ""
+        result.supplier_vat = emittente.get("partita_iva") or ""
+        result.supplier_address = emittente.get("indirizzo") or ""
+    # Date / numero
+    if not result.invoice_date:
+        dati_doc: dict[str, Any] = content.get("dati_documento", {}) or {}
+        result.invoice_date = dati_doc.get("data_emissione") or ""
+        result.invoice_number = dati_doc.get("numero") or ""
+    # raw_extracted → raw
+    if not result.raw:
+        raw_extracted = content.get("raw_extracted") or {}
+        if isinstance(raw_extracted, dict):
+            result.raw = raw_extracted
+    # Document type reale (non wrapper legacy "generic")
+    inner_dt = content.get("document_type")
+    if inner_dt:
+        factum_resp.document_type = inner_dt
 
 
 # ── Pipeline principale ───────────────────────────────────────────────────────
@@ -209,6 +269,11 @@ async def process_file(
     # Debug: Factum raw
     logger.info("FACTUM RAW: %s", json.dumps(factum_resp.model_dump(mode='json'), indent=2, ensure_ascii=False))
 
+    # Arricchisci FactumParseResult da payload.content (envelope v2) se i campi
+    # legacy V1 sono vuoti — il server aggiornato restituisce i dati reali in
+    # result.payload.content.* mentre result.total/result.supplier_name sono 0/"".
+    _enrich_from_payload(factum_resp)
+
     # Mappatura
     result = factum_resp.result
     doc_type_detected = mapper.detect_document_type(result)
@@ -252,19 +317,21 @@ async def process_file(
             fic_payload_debug['entity'] = {'id': expense.entity_id, 'name': supplier.name}
         logger.info("FIC PAYLOAD: %s", json.dumps(fic_payload_debug, indent=2, ensure_ascii=False))
 
-        fic_resp = await fic.create_expense(expense)
-
-        # Upload allegato (PDF/immagine) se il file è in formato supportato
+        # Ottieni attachment_token PRIMA di creare la spesa (FIC v2)
+        attachment_token: str | None = None
         if path.suffix.lower() in _ATTACHMENT_EXTENSIONS:
             try:
-                _ = await fic.upload_received_document_attachment(fic_resp.id, path)
-                logger.info("Allegato caricato su FIC per documento id=%d", fic_resp.id)
+                attachment_token = await fic.get_attachment_token(path)
+                logger.debug("Ottenuto attachment_token per %s", path.name)
             except Exception as exc:
                 logger.warning(
-                    "Upload allegato fallito per documento id=%d: %s — la registrazione contabile rimane valida",
-                    fic_resp.id,
+                    "Upload preview fallito per %s: %s — la spesa verrà creata senza allegato",
+                    path.name,
                     exc,
                 )
+
+        # Crea spesa/autofattura su FIC (con allegato se token disponibile)
+        fic_resp = await fic.create_expense(expense, attachment_token=attachment_token)
 
         queue.complete(sha, fic_resp.id)
         logger.info("Registrato su FIC: id=%d, tipo=%s", fic_resp.id, fic_resp.type)

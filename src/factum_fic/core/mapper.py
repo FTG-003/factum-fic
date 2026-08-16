@@ -9,6 +9,7 @@ Regole di business per determinare:
 from __future__ import annotations
 
 import datetime
+import re
 from typing import Any
 
 from factum_fic.core.models import (
@@ -42,6 +43,33 @@ _DEFAULT_ACCOUNTS: dict[str, str] = {
     "Pubblicità e marketing": "Spese di pubblicità",
     "Altri costi": "Costi vari",
 }
+
+
+def _to_iso_date(raw_date: str) -> str | None:
+    """Converte date nei formati DD/MM/YYYY, DD.MM.YYYY, YYYY-MM-DD in ISO.
+
+    Restituisce la stringa ISO YYYY-MM-DD, o None se la data non è valida.
+    """
+    raw_date = raw_date.strip()[:10]
+    # Già ISO
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", raw_date):
+        return raw_date
+    # DD/MM/YYYY o DD.MM.YYYY
+    m = re.match(r"^(\d{2})[/\.](\d{2})[/\.](\d{4})$", raw_date)
+    if m:
+        day, month, year = m.group(1), m.group(2), m.group(3)
+        try:
+            datetime.datetime.strptime(f"{year}-{month}-{day}", "%Y-%m-%d")
+            return f"{year}-{month}-{day}"
+        except ValueError:
+            return None
+    # Prova parsing generico
+    for fmt in ("%d/%m/%Y", "%d.%m.%Y", "%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            return datetime.datetime.strptime(raw_date, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
 
 
 class Mapper:
@@ -169,11 +197,11 @@ class Mapper:
                     raw_date = str(val).strip()[:10]
                     break
         if raw_date:
-            # Verifica formato ISO YYYY-MM-DD
-            try:
-                datetime.datetime.strptime(raw_date, "%Y-%m-%d")
-                issue_date = raw_date
-            except ValueError:
+            # Verifica formato ISO YYYY-MM-DD o converti da DD/MM/YYYY, DD.MM.YYYY
+            iso_date = _to_iso_date(raw_date)
+            if iso_date:
+                issue_date = iso_date
+            else:
                 issue_date = datetime.date.today().isoformat()
         else:
             issue_date = datetime.date.today().isoformat()

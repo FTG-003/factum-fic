@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ── Enums ────────────────────────────────────────────────────────────────────
 
@@ -83,7 +83,13 @@ class FactumTotals(BaseModel):
 
 
 class FactumParseResult(BaseModel):
-    """Risultato parsing da Factum (envelope v2)."""
+    """Risultato parsing da Factum (envelope v2).
+
+    I campi legacy V1 (total, supplier_name) possono essere vuoti;
+    i dati reali sono in payload.content (envelope v2).
+    """
+
+    model_config = ConfigDict(extra="allow")  # cattura payload.* e altri extra
 
     document_type: str = ""
     currency: str = "EUR"
@@ -99,7 +105,13 @@ class FactumParseResult(BaseModel):
 
 
 class FactumResponse(BaseModel):
-    """Risposta completa da Factum /v1/parse."""
+    """Risposta completa da Factum /v1/parse.
+
+    I campi legacy V1 (result.total, result.supplier_name) possono essere
+    vuoti se il server restituisce envelope v2 con i dati in payload.content.
+    """
+
+    model_config = ConfigDict(extra="allow")  # cattura payload.* e altri extra
 
     job_id: str = ""
     status: str = ""
