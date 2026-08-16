@@ -206,6 +206,20 @@ class FICClient:
                 }
             ]
 
+        # items_list: detraibilità esplicita per Regime Forfettario
+        # - tax_deductibility: 100  → costo deducibile al 100%
+        # - vat_deductibility: 0    → IVA indetraibile (Forfettario)
+        fic_payload["items_list"] = [
+            {
+                "name": expense.description or "Acquisto servizi",
+                "net_price": expense.amount_net,
+                "category": expense.category or "Servizi",
+                "tax_deductibility": 100,
+                "vat_deductibility": 0,
+                "vat": {"id": 0, "value": 0},
+            }
+        ]
+
         # Attachment token: PDF allegato in unico colpo
         if attachment_token:
             fic_payload["attachment_token"] = attachment_token
