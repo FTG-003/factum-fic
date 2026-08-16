@@ -87,7 +87,7 @@ def process_inbox(
     from factum_fic.core.factum_client import FactumClient
     from factum_fic.core.fic_client import FICClient
     from factum_fic.core.mapper import Mapper
-    from factum_fic.core.pipeline import process_file
+    from factum_fic.core.pipeline import process_file, is_temp_file
     from factum_fic.storage.queue import QueueStore
 
     settings = load_settings()
@@ -100,8 +100,8 @@ def process_inbox(
     files = sorted(
         p for p in inbox.iterdir()
         if p.is_file()
-        and p.suffix.lower() in {".pdf", ".xml", ".txt", ".csv", ".png", ".jpg", ".jpeg"}
-        and p.suffix.lower() not in {".tmp", ".crdownload"}
+        and not is_temp_file(p)
+        and p.suffix.lower() in {'.pdf', '.xml', '.txt', '.csv', '.png', '.jpg', '.jpeg'}
     )
 
     if not files:

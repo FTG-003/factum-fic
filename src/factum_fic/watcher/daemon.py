@@ -12,12 +12,17 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+import re
+
 from factum_fic.config import Settings
 
 logger = logging.getLogger(__name__)
 
 # Estensioni supportate
 _SUPPORTED_EXTENSIONS = {".pdf", ".xml", ".txt", ".csv"}
+
+# Pattern per file temporanei/parziali da ignorare
+_TEMP_FILE_RE = re.compile(r"\.(part|crdownload|tmp|swp|bak)$|~$", re.IGNORECASE)
 
 
 class FactumFICHandler(FileSystemEventHandler):
@@ -30,6 +35,12 @@ class FactumFICHandler(FileSystemEventHandler):
         if event.is_directory:
             return
         path = Path(event.src_path)
+        # Ignora file nascosti e temporanei
+        if path.name.startswith("."):
+            return
+        if _TEMP_FILE_RE.search(path.name):
+            logger.debug("Ignorato file temporaneo: %s", path.name)
+            return
         if path.suffix.lower() not in _SUPPORTED_EXTENSIONS:
             return
         # Aspetta che il file sia completamente scritto (copiatura in corso)

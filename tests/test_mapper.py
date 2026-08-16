@@ -142,3 +142,55 @@ def test_build_expense_amount_sanitization(mapper: Mapper) -> None:
     assert expense.amount_net == 250.00
     assert expense.amount_gross == 250.00
     assert expense.date == "2026-09-01"
+
+
+# ── Currency conversion tests ─────────────────────────────────────────────────
+
+import pytest
+from unittest.mock import patch, AsyncMock
+
+
+@pytest.mark.asyncio
+async def test_convert_currency_same() -> None:
+    """Stessa valuta → tasso 1.0."""
+    from factum_fic.core.mapper import convert_currency
+    rate = await convert_currency("EUR", "EUR")
+    assert rate == 1.0
+
+
+@pytest.mark.asyncio
+async def test_convert_currency_usd_to_eur() -> None:
+    """USD → EUR: chiamata API Frankfurter con risposta mockata."""
+    from factum_fic.core.mapper import convert_currency
+
+    mock_response = {"amount": 1.0, "base": "USD", "date": "2026-08-16", "rates": {"EUR": 0.92}}
+
+    with patch("httpx.AsyncClient") as mock_client:
+        mock_instance = AsyncMock()
+        response_mock = AsyncMock()
+        response_mock.status_code = 200
+        response_mock.raise_for_status = AsyncMock()
+        response_mock.json = lambda: mock_response
+        mock_instance.get.return_value = response_mock
+        mock_client.return_value.__aenter__.return_value = mock_instance
+
+        rate = await convert_currency("USD", "EUR")
+        assert rate == 0.92
+
+
+@pytest.mark.asyncio
+async def test_convert_currency_api_failure() -> None:
+    """API Frankfurter non disponibile → fallback a 1.0 (log warning)."""
+    from factum_fic.core.mapper import _EXCHANGE_RATES_CACHE, convert_currency
+
+    # Pulisce la cache per evitare interferenze dal test precedente
+    _EXCHANGE_RATES_CACHE.clear()
+
+    with patch("httpx.AsyncClient") as mock_client:
+        mock_instance = AsyncMock()
+        # Simula un eccezione sulla chiamata get (timeout / errore di rete)
+        mock_instance.get = AsyncMock(side_effect=Exception("API down"))
+        mock_client.return_value.__aenter__.return_value = mock_instance
+
+        rate = await convert_currency("USD", "EUR")
+        assert rate == 1.0

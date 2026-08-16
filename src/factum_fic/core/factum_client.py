@@ -6,10 +6,10 @@ import hashlib
 from typing import Any
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from factum_fic.config import Settings
 from factum_fic.core.models import FactumResponse
+from factum_fic.core.retry_policy import selective_retry
 
 _HEADERS = {"User-Agent": "factum-fic/0.1.0"}
 
@@ -27,29 +27,19 @@ class FactumClient:
                 "X-API-Key": self._api_key,
                 "Content-Type": "application/json",
             },
-            timeout=30.0,
+            timeout=60.0,
         )
 
     async def close(self) -> None:
         await self._client.aclose()
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        reraise=True,
-    )
+    @selective_retry
     async def parse_text(self, text: str, doc_type: str = "auto") -> FactumResponse:
         """Invia un testo a /v1/parse e restituisce il risultato.
 
-        Args:
-            text: Contenuto del documento da parsare (estratto da PDF/XML).
-            doc_type: Suggerimento tipo documento.
-
-        Returns:
-            FactumResponse con il risultato del parsing.
-
         Raises:
-            httpx.HTTPError: Se la chiamata fallisce dopo i retry.
+            httpx.HTTPStatusError: 4xx fallisce subito (nessun retry).
+            httpx.TimeoutException | httpx.ConnectError: retry 3x con backoff.
         """
         payload: dict[str, Any] = {"text": text, "doc_type": doc_type}
         response = await self._client.post("/v1/parse", json=payload)

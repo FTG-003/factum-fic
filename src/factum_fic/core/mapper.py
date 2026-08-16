@@ -9,6 +9,7 @@ Regole di business per determinare:
 from __future__ import annotations
 
 import datetime
+import logging
 import re
 from typing import Any
 
@@ -70,6 +71,53 @@ def _to_iso_date(raw_date: str) -> str | None:
         except ValueError:
             continue
     return None
+
+
+# ── Exchange rate cache ─────────────────────────────────────────────────────────
+
+_EXCHANGE_RATES_CACHE: dict[str, tuple[float, datetime.datetime]] = {}
+_CACHE_TTL = datetime.timedelta(hours=6)
+
+logger = logging.getLogger(__name__)
+
+
+async def convert_currency(from_currency: str, to_currency: str = "EUR") -> float:
+    """Interroga l'API Frankfurter (BCE) per il tasso di cambio corrente.
+
+    I risultati sono cached in memoria per 6 ore.
+
+    Returns:
+        Tasso di cambio (moltiplicatore: amount * rate = amount_in_EUR).
+        1.0 se from_currency == to_currency o in caso di errore.
+    """
+    if from_currency == to_currency:
+        return 1.0
+    now = datetime.datetime.now()
+    cache_key = f"{from_currency}_{to_currency}"
+    cached = _EXCHANGE_RATES_CACHE.get(cache_key)
+    if cached and (now - cached[1]) < _CACHE_TTL:
+        return cached[0]
+
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(
+                "https://api.frankfurter.app/latest",
+                params={"from": from_currency, "to": to_currency},
+            )
+        resp.raise_for_status()
+        data = resp.json()
+        rate = float(data["rates"][to_currency])
+        _EXCHANGE_RATES_CACHE[cache_key] = (rate, now)
+        return rate
+    except Exception:
+        logger.warning(
+            "Tasso di cambio non disponibile per %s→%s, restituisco 1.0",
+            from_currency,
+            to_currency,
+        )
+        return 1.0
 
 
 class Mapper:

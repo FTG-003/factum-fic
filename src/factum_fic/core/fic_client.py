@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from factum_fic.config import Settings
 from factum_fic.core.models import (
@@ -15,6 +14,7 @@ from factum_fic.core.models import (
     FICCreateSupplierRequest,
     FICExpenseResponse,
 )
+from factum_fic.core.retry_policy import selective_retry
 
 _HEADERS = {"User-Agent": "factum-fic/0.1.0"}
 
@@ -39,11 +39,7 @@ class FICClient:
     async def close(self) -> None:
         await self._client.aclose()
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        reraise=True,
-    )
+    @selective_retry
     async def create_supplier(self, supplier: FICCreateSupplierRequest) -> dict[str, Any]:
         """Crea un fornitore su Fatture in Cloud.
 
@@ -61,11 +57,7 @@ class FICClient:
         response.raise_for_status()
         return response.json()
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        reraise=True,
-    )
+    @selective_retry
     async def search_supplier(self, name: str, vat_number: str | None = None) -> dict[str, Any] | None:
         """Cerca un fornitore esistente per nome o partita IVA.
 
@@ -85,13 +77,56 @@ class FICClient:
         entities = data.get("data", [])
         return entities[0] if entities else None
 
+    # ── Ricerca documento esistente ────────────────────────────────────────────
+
+    @selective_retry
+    async def search_document(
+        self,
+        entity_id: int | None = None,
+        description: str | None = None,
+        date: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Cerca un documento di spesa esistente su FIC per descrizione e fornitore.
+
+        Usato per anti-duplicazione: se un documento con la stessa descrizione
+        e data esiste già (es. da un timeout/retry precedente), non lo ricrea.
+
+        Args:
+            entity_id: ID fornitore su FIC.
+            description: Descrizione del documento da cercare.
+            date: Data documento (YYYY-MM-DD).
+
+        Returns:
+            Il primo documento matchato, o None.
+        """
+        params: dict[str, str] = {}
+        if entity_id:
+            params["entity_id"] = str(entity_id)
+        if description:
+            params["description"] = description
+        if date:
+            params["date_from"] = date
+            params["date_to"] = date
+        params["per_page"] = "5"
+        response = await self._client.get(
+            f"/c/{self._company_id}/received_documents",
+            params=params,
+        )
+        response.raise_for_status()
+        data = response.json()
+        docs = data.get("data", [])
+        if not docs:
+            return None
+        # Match esatto per descrizione (o primo risultato se descrizione non data)
+        if description and len(docs) > 1:
+            for doc in docs:
+                if doc.get("description") == description:
+                    return doc
+        return docs[0]
+
     # ── Upload attachment ─────────────────────────────────────────────────────
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        reraise=True,
-    )
+    @selective_retry
     async def get_attachment_token(self, file_path: str | Path) -> str:
         """Carica un file PDF su FIC v2 e restituisce un attachment_token.
 
@@ -155,11 +190,7 @@ class FICClient:
 
     # ── Creazione documento ───────────────────────────────────────────────────
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        reraise=True,
-    )
+    @selective_retry
     async def create_expense(
         self,
         expense: FICCreateExpenseRequest,
@@ -233,11 +264,6 @@ class FICClient:
         data = response.json()
         return FICExpenseResponse(**data.get("data", {}))
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        reraise=True,
-    )
     async def health(self) -> bool:
         """Verifica connettività con FIC API."""
         try:
