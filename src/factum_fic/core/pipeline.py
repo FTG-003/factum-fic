@@ -10,21 +10,21 @@ Gestisce l'intero flusso:
 7. Registra su Fatture in Cloud (spesa o autofattura)
 8. Marca come completato nella coda SQLite PRIMA dello spostamento file
 
-File lifecycle: da_elaborare → elaborate/YYYY-MM/ (successo/duplicato) | errori/YYYY-MM/ (errore)
+File lifecycle: da_elaborare → archiviate/YYYY/MM/ (successo/duplicato) | da_verificare/ (errore)
+Nessun file JSON/TMP intermedio: lo stato risiede solo nel DB SQLite.
 """
 
 from __future__ import annotations
 
-import datetime
 import hashlib
 import json
 import logging
 import re
-import shutil
 from pathlib import Path
 from typing import Any
 
 from factum_fic.config import Settings
+from factum_fic.core.archiver import archive_failed_file, archive_processed_file
 from factum_fic.core.extractor import extract_text
 from factum_fic.core.factum_client import FactumClient
 from factum_fic.core.fic_client import FICClient
@@ -57,51 +57,6 @@ def ensure_dirs(settings: Settings) -> None:
     for name in ("inbox_dir", "processed_dir", "failed_dir"):
         path = Path(getattr(settings, name)).expanduser().resolve()
         path.mkdir(parents=True, exist_ok=True)
-
-
-def _archive_path(settings: Settings, subdir: str, original: Path) -> Path:
-    """Calcola il percorso di destinazione con struttura anno/mese.
-
-    Esempio: processed/2026-08/nome_file.pdf
-    Evita sovrascritture aggiungendo un suffisso numerico se il file esiste già.
-    """
-    base = Path(getattr(settings, subdir)).expanduser().resolve()
-    today = datetime.date.today()
-    dated_dir = base / f"{today.year}-{today.month:02d}"
-    dated_dir.mkdir(parents=True, exist_ok=True)
-
-    dest = dated_dir / original.name
-    counter = 1
-    while dest.exists():
-        stem = original.stem
-        suffix = original.suffix
-        dest = dated_dir / f"{stem}_{counter}{suffix}"
-        counter += 1
-    return dest
-
-
-def move_to_processed(path: Path, settings: Settings) -> Path:
-    """Sposta il file in processed/ (con struttura anno/mese).
-
-    Returns:
-        Percorso di destinazione.
-    """
-    dest = _archive_path(settings, "processed_dir", path)
-    shutil.move(str(path), str(dest))
-    logger.info("✅ File elaborato e archiviato in: %s", dest)
-    return dest
-
-
-def move_to_failed(path: Path, settings: Settings) -> Path:
-    """Sposta il file in failed/.
-
-    Returns:
-        Percorso di destinazione.
-    """
-    dest = _archive_path(settings, "failed_dir", path)
-    shutil.move(str(path), str(dest))
-    logger.warning("❌ Errore elaborazione, spostato in: %s", dest)
-    return dest
 
 
 def is_temp_file(path: Path) -> bool:
@@ -232,8 +187,9 @@ async def _check_fic_exists(
             expense.description,
         )
         queue.complete(sha, doc_id)
+        base_dir = Path(settings.base_storage_dir)
         try:
-            move_to_processed(path, settings)
+            archive_processed_file(path, base_dir)
         except Exception as exc:
             logger.warning("Fallito spostamento duplicato FIC: %s", exc)
         return PipelineResult(
@@ -295,11 +251,14 @@ async def process_file(
             status=DocumentStatus.SKIPPED,
             fic_status="duplicate",
         )
+        base_dir = Path(settings.base_storage_dir)
         try:
-            move_to_processed(path, settings)
+            archive_processed_file(path, base_dir)
         except Exception as exc:
             logger.warning("Fallito spostamento duplicato: %s", exc)
         return result
+
+    base_dir = Path(settings.base_storage_dir)
 
     if not force:
         queue.enqueue(sha, str(path))
@@ -317,7 +276,7 @@ async def process_file(
             factum_status="empty_text",
         )
         try:
-            move_to_failed(path, settings)
+            archive_failed_file(path, base_dir)
         except Exception as exc:
             logger.warning("Fallito spostamento errore: %s", exc)
         return result
@@ -334,7 +293,7 @@ async def process_file(
             factum_error=str(exc),
         )
         try:
-            move_to_failed(path, settings)
+            archive_failed_file(path, base_dir)
         except Exception as exc2:
             logger.warning("Fallito spostamento errore: %s", exc2)
         return result
@@ -347,7 +306,7 @@ async def process_file(
             factum_error=factum_resp.error,
         )
         try:
-            move_to_failed(path, settings)
+            archive_failed_file(path, base_dir)
         except Exception as exc:
             logger.warning("Fallito spostamento errore: %s", exc)
         return result
@@ -406,7 +365,7 @@ async def process_file(
             document_type=doc_type_detected,
         )
         try:
-            move_to_failed(path, settings)
+            archive_failed_file(path, base_dir)
         except Exception as exc2:
             logger.warning("Fallito spostamento errore: %s", exc2)
         return result
@@ -494,7 +453,13 @@ async def process_file(
         )
 
         try:
-            move_to_processed(path, settings)
+            archive_processed_file(
+                path,
+                base_dir,
+                date_str=result.invoice_date or None,
+                supplier_name=result.supplier_name or None,
+                invoice_num=result.invoice_number or None,
+            )
         except Exception as exc:
             logger.warning("Fallito spostamento successo: %s", exc)
         return result
@@ -510,7 +475,7 @@ async def process_file(
             document_type=doc_type_detected,
         )
         try:
-            move_to_failed(path, settings)
+            archive_failed_file(path, base_dir)
         except Exception as exc2:
             logger.warning("Fallito spostamento errore: %s", exc2)
         return result

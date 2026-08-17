@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     inbox_dir: str = Field(default="./da_elaborare", alias="INBOX_DIR")
     processed_dir: str = Field(default="./elaborate", alias="PROCESSED_DIR")
     failed_dir: str = Field(default="./errori", alias="FAILED_DIR")
+    # Directory radice per l'archiver (zero-clutter): al suo interno vengono
+    # create le sottodirectory ``archiviate/YYYY/MM/`` e ``da_verificare/``.
+    base_storage_dir: str = Field(default=".", alias="BASE_STORAGE_DIR")
 
     # Watcher
     watch_dir: str = Field(default="~/Downloads", alias="WATCH_DIR")
