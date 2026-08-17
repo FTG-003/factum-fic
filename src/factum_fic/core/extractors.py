@@ -140,9 +140,31 @@ def parse_sdi_xml(xml_bytes: bytes) -> FactumParseResult:
     vat_amount = round(vat_amount, 2)
     total_gross = round(total_gross, 2)
 
+    # ── 4. Reverse Charge: N6.x (inversione contabile) o fornitore estero ──
+    # Nello standard SDI, IVA=0 NON basta: le fatture italiane con Natura
+    # N2.2 (Forfettario), N4 (Esente), N1 (Escluse) hanno IVA=0 ma NON
+    # richiedono autofattura. L'inversione contabile si identifica SOLO con:
+    #   - Codice Natura N6.x (da N6.1 a N6.9)
+    #   - Oppure fornitore estero (IdPaese != "IT") con IVA non applicata
+    cedente_country = (
+        (cedente.findtext(".//IdFiscaleIVA/IdPaese", "IT") or "IT")
+        .strip()
+        .upper()
+    )
+    nature_list: list[str] = []
+    for r in riepiloghi:
+        nat = (r.findtext("Natura") or "").strip().upper()
+        if nat:
+            nature_list.append(nat)
+
+    has_n6 = any(n.startswith("N6") for n in nature_list)
+    is_foreign_supplier = cedente_country != "IT"
+    is_reverse_charge = has_n6 or (is_foreign_supplier and vat_amount == 0.0)
+
     logger.info(
         "SDI XML parsed: %s — P.IVA %s — n. %s del %s — "
-        "netto %.2f / IVA %.2f / totale %.2f %s",
+        "netto %.2f / IVA %.2f / totale %.2f %s — "
+        "Natura=%s RC=%s",
         supplier_name,
         supplier_vat,
         invoice_number,
@@ -151,6 +173,8 @@ def parse_sdi_xml(xml_bytes: bytes) -> FactumParseResult:
         vat_amount,
         total_gross,
         currency,
+        ",".join(nature_list) if nature_list else "-",
+        is_reverse_charge,
     )
 
     return FactumParseResult(
@@ -170,7 +194,8 @@ def parse_sdi_xml(xml_bytes: bytes) -> FactumParseResult:
             "currency": currency,
             "invoice_number": invoice_number,
             "invoice_date": invoice_date,
-            "is_reverse_charge": vat_amount == 0.0,
+            "is_reverse_charge": is_reverse_charge,
+            "nature": nature_list,  # codici Natura SDI per audit
         },
     )
 

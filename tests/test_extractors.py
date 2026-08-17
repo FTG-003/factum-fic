@@ -35,7 +35,20 @@ def _minimal_xml(
     imponibile: str = "15.69",
     imposta: str = "3.45",
     totale: str = "19.14",
+    natura: str | None = None,
 ) -> bytes:
+    # Costruisci il blocco DatiRiepilogo fuori dall'f-string principale
+    # per evitare problemi di f-string annidate ("{natura}" agganciato dal
+    # parser esterno).
+    natura_xml = f"<Natura>{natura}</Natura>" if natura else ""
+    riepilogo = (
+        "<DatiRiepilogo>"
+        "<AliquotaIVA>22.00</AliquotaIVA>"
+        f"<ImponibileImporto>{imponibile}</ImponibileImporto>"
+        f"<Imposta>{imposta}</Imposta>"
+        f"{natura_xml}"
+        "</DatiRiepilogo>"
+    )
     return _xml_with_ns(
         f"""
         <FatturaElettronicaHeader>
@@ -77,11 +90,7 @@ def _minimal_xml(
                     <PrezzoTotale>15.69</PrezzoTotale>
                     <AliquotaIVA>22.00</AliquotaIVA>
                 </DettaglioLinee>
-                <DatiRiepilogo>
-                    <AliquotaIVA>22.00</AliquotaIVA>
-                    <ImponibileImporto>{imponibile}</ImponibileImporto>
-                    <Imposta>{imposta}</Imposta>
-                </DatiRiepilogo>
+                {riepilogo}
             </DatiBeniServizi>
         </FatturaElettronicaBody>
         """
@@ -144,8 +153,20 @@ def test_is_reverse_charge_false_with_iva() -> None:
 # ── Reverse charge / zero IVA ────────────────────────────────────────────────
 
 
-def test_reverse_charge_zero_vat() -> None:
-    """IVA 0.00 (art. 17-ter) → is_reverse_charge True e importi conservati."""
+def test_is_reverse_charge_false_with_iva() -> None:
+    """DE fornitore, IVA=3.45 > 0 → RC=False (fornitore estero MA IVA applicata)."""
+    result = parse_sdi_xml(_minimal_xml())
+    assert result.raw["is_reverse_charge"] is False
+
+
+# ── Reverse charge: logica SDI corretta ─────────────────────────────────────
+# Nello standard SDI, IVA=0 da sola NON basta: serve Natura N6.x o fornitore
+# estero con IVA zero. I codici N2.2 (forfettario) e N4 (esente) hanno IVA=0
+# ma NON sono reverse charge.
+
+
+def test_reverse_charge_foreign_supplier_zero_vat() -> None:
+    """Fornitore DE, IVA 0.00 → RC True (art. 17-ter DPR 633/72)."""
     result = parse_sdi_xml(
         _minimal_xml(imponibile="15.69", imposta="0.00", totale="15.69")
     )
@@ -153,6 +174,99 @@ def test_reverse_charge_zero_vat() -> None:
     assert result.raw["amount_vat"] == 0.0
     assert result.raw["amount_gross"] == 15.69
     assert result.raw["is_reverse_charge"] is True
+
+
+def test_reverse_charge_n6_9_supplier_it() -> None:
+    """Caso C: Fornitore IT, IVA 0%, Natura N6.9 → RC True (inversione contabile)."""
+    result = parse_sdi_xml(
+        _minimal_xml(
+            id_paese="IT",
+            id_codice="04923300166",
+            denominazione="Fabrizio Terzi",
+            imponibile="1000.00",
+            imposta="0.00",
+            totale="1000.00",
+            natura="N6.9",
+        )
+    )
+    assert result.raw["is_reverse_charge"] is True
+    assert result.raw["nature"] == ["N6.9"]
+    assert result.supplier_country == "IT"
+
+
+def test_no_reverse_charge_n2_2_forfettario() -> None:
+    """Caso A: Fornitore IT, IVA 0%, Natura N2.2 (Forfettario) → RC False."""
+    result = parse_sdi_xml(
+        _minimal_xml(
+            id_paese="IT",
+            id_codice="04923300166",
+            denominazione="Mario Rossi",
+            imponibile="500.00",
+            imposta="0.00",
+            totale="500.00",
+            natura="N2.2",
+        )
+    )
+    assert result.raw["is_reverse_charge"] is False
+    assert result.raw["nature"] == ["N2.2"]
+
+
+def test_no_reverse_charge_n4_esente() -> None:
+    """Caso B: Fornitore IT, IVA 0%, Natura N4 (Esente art.10) → RC False."""
+    result = parse_sdi_xml(
+        _minimal_xml(
+            id_paese="IT",
+            id_codice="04923300166",
+            denominazione="Studio Legale XYZ",
+            imponibile="2000.00",
+            imposta="0.00",
+            totale="2000.00",
+            natura="N4",
+        )
+    )
+    assert result.raw["is_reverse_charge"] is False
+    assert result.raw["nature"] == ["N4"]
+
+
+def test_reverse_charge_usa_supplier_zero_vat() -> None:
+    """Caso D: Fornitore USA (extra-UE), IVA 0% → RC True."""
+    result = parse_sdi_xml(
+        _minimal_xml(
+            id_paese="US",
+            id_codice="123456789",
+            denominazione="AWS Inc.",
+            imponibile="299.00",
+            imposta="0.00",
+            totale="299.00",
+        )
+    )
+    assert result.raw["is_reverse_charge"] is True
+    assert result.supplier_country == "US"
+    assert result.supplier_vat == "US123456789"
+
+
+def test_reverse_charge_nature_audit_trail() -> None:
+    """nature[] deve essere popolato nel raw per audit."""
+    result = parse_sdi_xml(
+        _minimal_xml(
+            id_paese="IT",
+            id_codice="04923300166",
+            imponibile="100.00",
+            imposta="0.00",
+            totale="100.00",
+            natura="N6.1",
+        )
+    )
+    assert "nature" in result.raw
+    assert result.raw["nature"] == ["N6.1"]
+
+
+def test_reverse_charge_no_nature_field_when_missing() -> None:
+    """Senza tag Natura in nessun DatiRiepilogo → nature lista vuota."""
+    result = parse_sdi_xml(
+        _minimal_xml(imponibile="100.00", imposta="22.00", totale="122.00")
+    )
+    assert result.raw["nature"] == []
 
 
 # ── Nome/Cognome al posto di Denominazione ──────────────────────────────────
@@ -202,12 +316,13 @@ def test_multiple_dati_riepilogo_summed() -> None:
 
 def test_fallback_importo_totale_documento() -> None:
     """Senza DatiRiepilogo → usa ImportoTotaleDocumento come totale."""
-    xml = _minimal_xml().decode("utf-8")
-    xml = xml.replace(
-        "<DatiRiepilogo>\n                    <AliquotaIVA>22.00</AliquotaIVA>\n                    <ImponibileImporto>15.69</ImponibileImporto>\n                    <Imposta>3.45</Imposta>\n                </DatiRiepilogo>",
-        "",
-    )
-    result = parse_sdi_xml(xml.encode("utf-8"))
+    xml_str = _minimal_xml().decode("utf-8")
+    # Rimuove l'intero blocco <DatiRiepilogo>...</DatiRiepilogo> (single-line)
+    import re
+    xml_str = re.sub(r"<DatiRiepilogo>.*?</DatiRiepilogo>", "", xml_str)
+    # Verifica rimozione
+    assert "<DatiRiepilogo>" not in xml_str
+    result = parse_sdi_xml(xml_str.encode("utf-8"))
     assert result.raw["amount_gross"] == 19.14
     assert result.raw["amount_net"] == 19.14
     assert result.raw["amount_vat"] == 0.0
