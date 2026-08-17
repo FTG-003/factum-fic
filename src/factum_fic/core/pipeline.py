@@ -26,6 +26,7 @@ from typing import Any
 from factum_fic.config import Settings
 from factum_fic.core.archiver import archive_failed_file, archive_processed_file
 from factum_fic.core.extractor import extract_text
+from factum_fic.core.extractors import parse_sdi_xml
 from factum_fic.core.factum_client import FactumClient
 from factum_fic.core.fic_client import FICClient
 from factum_fic.core.mapper import Mapper
@@ -490,60 +491,97 @@ async def process_file(
     else:
         queue.remove(sha)
 
-    # Estrai testo tramite estrattore locale
-    try:
-        text = extract_text(path)
-    except ValueError as exc:
-        logger.warning("Testo non estraibile per %s: %s", path.name, exc)
-        result = PipelineResult(
-            file=file_event,
-            status=DocumentStatus.FAILED,
-            factum_status="empty_text",
-        )
+    # ── XML / SDI: bypass totale Factum Parse, parsing deterministico locale ──
+    if path.suffix.lower() == ".xml":
+        # Zero chiamate di rete, zero token spesi, zero rischi di allucinazione
         try:
-            archive_failed_file(path, base_dir)
+            file_bytes = path.read_bytes()
+            result = parse_sdi_xml(file_bytes)
         except Exception as exc:
-            logger.warning("Fallito spostamento errore: %s", exc)
-        return result
+            logger.exception("XML SDI parsing fallito per %s", path.name)
+            result = PipelineResult(
+                file=file_event,
+                status=DocumentStatus.FAILED,
+                factum_status="xml_parse_error",
+                factum_error=str(exc),
+            )
+            try:
+                archive_failed_file(path, base_dir)
+            except Exception as exc2:
+                logger.warning("Fallito spostamento errore: %s", exc2)
+            return result
 
-    # Chiamata Factum
-    try:
-        logger.info("TESTO INVIATO A FACTUM (%d caratteri):\n%s", len(text), text[:2000])
-        factum_resp = await factum.parse_text(text)
-    except Exception as exc:
-        logger.exception("Factum parsing fallito per %s", path.name)
-        result = PipelineResult(
-            file=file_event,
-            status=DocumentStatus.FAILED,
-            factum_status="error",
-            factum_error=str(exc),
+        # Costruisce un FactumResponse fittizio come se fosse stato Factum a rispondere
+        # Così il resto della pipeline (mapper, FIC) funziona identico.
+        factum_resp = FactumResponse(
+            status="done",
+            document_type="fattura",
+            result=result,
         )
-        try:
-            archive_failed_file(path, base_dir)
-        except Exception as exc2:
-            logger.warning("Fallito spostamento errore: %s", exc2)
-        return result
+        logger.info(
+            "SDI XML parsed (locale, zero LLM): %s — %s — n. %s del %s",
+            result.supplier_name,
+            result.supplier_vat,
+            result.invoice_number,
+            result.invoice_date,
+        )
 
-    if factum_resp.status != "done" or factum_resp.result is None:
-        result = PipelineResult(
-            file=file_event,
-            status=DocumentStatus.FAILED,
-            factum_status=factum_resp.status,
-            factum_error=factum_resp.error,
-        )
+    else:
+        # PDF / altri: estrai testo e invia a Factum Parse API
+        # Estrai testo tramite estrattore locale
         try:
-            archive_failed_file(path, base_dir)
+            text = extract_text(path)
+        except ValueError as exc:
+            logger.warning("Testo non estraibile per %s: %s", path.name, exc)
+            result = PipelineResult(
+                file=file_event,
+                status=DocumentStatus.FAILED,
+                factum_status="empty_text",
+            )
+            try:
+                archive_failed_file(path, base_dir)
+            except Exception as exc:
+                logger.warning("Fallito spostamento errore: %s", exc)
+            return result
+
+        # Chiamata Factum
+        try:
+            logger.info("TESTO INVIATO A FACTUM (%d caratteri):\n%s", len(text), text[:2000])
+            factum_resp = await factum.parse_text(text)
         except Exception as exc:
-            logger.warning("Fallito spostamento errore: %s", exc)
-        return result
+            logger.exception("Factum parsing fallito per %s", path.name)
+            result = PipelineResult(
+                file=file_event,
+                status=DocumentStatus.FAILED,
+                factum_status="error",
+                factum_error=str(exc),
+            )
+            try:
+                archive_failed_file(path, base_dir)
+            except Exception as exc2:
+                logger.warning("Fallito spostamento errore: %s", exc2)
+            return result
 
-    logger.info("FACTUM RAW: %s", json.dumps(factum_resp.model_dump(mode='json'), indent=2, ensure_ascii=False))
+        if factum_resp.status != "done" or factum_resp.result is None:
+            result = PipelineResult(
+                file=file_event,
+                status=DocumentStatus.FAILED,
+                factum_status=factum_resp.status,
+                factum_error=factum_resp.error,
+            )
+            try:
+                archive_failed_file(path, base_dir)
+            except Exception as exc:
+                logger.warning("Fallito spostamento errore: %s", exc)
+            return result
 
-    # Arricchisci FactumParseResult da payload.content (envelope v2)
-    _enrich_from_payload(factum_resp)
+        logger.info("FACTUM RAW: %s", json.dumps(factum_resp.model_dump(mode='json'), indent=2, ensure_ascii=False))
 
-    # Fallback: se Factum non ha estratto importi, prova regex su testo PDF
-    _fallback_enrich_from_file(factum_resp.result, text)
+        # Arricchisci FactumParseResult da payload.content (envelope v2)
+        _enrich_from_payload(factum_resp)
+
+        # Fallback: se Factum non ha estratto importi, prova regex su testo PDF
+        _fallback_enrich_from_file(factum_resp.result, text)
 
     # Mappatura
     result = factum_resp.result
