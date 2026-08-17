@@ -31,6 +31,7 @@ from factum_fic.core.fic_client import FICClient
 from factum_fic.core.mapper import Mapper
 from factum_fic.core.models import (
     DocumentStatus,
+    FactumParseResult,
     FactumResponse,
     FileEvent,
     PipelineResult,
@@ -115,6 +116,89 @@ def _parse_amount(value: Any) -> float:
         except ValueError:
             return 0.0
     return 0.0
+
+
+def _fallback_amount_from_text(text: str) -> float:
+    """Cerca importi nel testo estratto dal PDF quando Factum non li estrae.
+
+    Usa pattern regex multi-lingua (EN/DE/IT) per trovare:
+    - "Total (excl. VAT) € 15.69"
+    - "Gesamtbetrag € 50,40"
+    - "Imponibile € 15,69"
+    - "Subtotal € 15.69"
+    - "€ 15.69" come ultima risorsa
+    """
+    amount_patterns = [
+        # Pattern prioritari con etichetta (total/subtotal/netto/imponibile/zwischensumme)
+        r'(?:total|subtotal|gesamtbetrag|zwischensumme|netto|imponibile|amount\s*due)'
+        r'\s*(?:\(excl\.?\s*VAT\))?'
+        r'[\s:]*[€€]?\s*([\d]{1,4}(?:[.,][\d]{3})*[.,][\d]{2})',
+        # Pattern "Total € 15.69" / "€ 15.69" generico
+        r'[€€]\s*([\d]{1,4}(?:[.,][\d]{3})*[.,][\d]{2})',
+        # Pattern "15.69 EUR" / "15,69 EUR"
+        r'([\d]{1,4}(?:[.,][\d]{3})*[.,][\d]{2})\s*(?:EUR|€|euro|Euro)',
+    ]
+    best = 0.0
+    for pattern in amount_patterns:
+        for m in re.finditer(pattern, text, re.IGNORECASE):
+            raw = m.group(1)
+            # Normalizza la virgola decimale
+            if "," in raw and "." in raw:
+                # 1.200,00 → punti come separatori migliaia
+                if raw.rfind(",") > raw.rfind("."):
+                    raw = raw.replace(".", "").replace(",", ".")
+                # 1,200.00 → virgola come separatore migliaia
+                else:
+                    raw = raw.replace(",", "")
+            elif "," in raw:
+                raw = raw.replace(",", ".")
+            # Se rimangono più punti, formattazione errata
+            if raw.count(".") > 1:
+                parts = raw.split(".")
+                # Prendi il numero finché non ci sono 2 decimali finali
+                # Esempio: 1.200.00 → parts = ["1", "200", "00"]
+                raw = "".join(parts[:-1]) + "." + parts[-1]
+            try:
+                val = float(raw)
+                if val > best:
+                    best = val
+            except ValueError:
+                continue
+    return round(best, 2)
+
+
+def _fallback_enrich_from_file(result: FactumParseResult, text: str) -> None:
+    """Arricchisce FactumParseResult con importi estratti dal testo PDF
+    quando Factum restituisce importi nulli o zero.
+
+    Cerca importi nel testo, data fattura e numero fattura con regex.
+    """
+    if result.total and result.total > 0:
+        return  # già arricchito da Factum
+
+    amount = _fallback_amount_from_text(text)
+    if amount:
+        result.total = amount
+        raw_norm = dict(result.raw or {})
+        raw_norm.setdefault("amount_net", amount)
+        raw_norm.setdefault("amount_gross", amount)
+        raw_norm.setdefault("amount_vat", 0.0)
+        result.raw = raw_norm
+        logger.info("Fallback importo da testo PDF: %.2f", amount)
+
+    # Data fattura da regex
+    if not result.invoice_date:
+        date_m = re.search(r'(?:Invoice\s*date|Data\s*fattura)[^\d]*(\d{2}/\d{2}/\d{4})', text, re.IGNORECASE)
+        if date_m:
+            result.invoice_date = date_m.group(1)
+            logger.info("Fallback data da testo PDF: %s", result.invoice_date)
+
+    # Numero fattura da regex
+    if not result.invoice_number:
+        inv_m = re.search(r'(?:Invoice\s*no\.?|Fattura\s*n\.?|N\.?\s*fattura)[:\s]+([\w/-]+)', text, re.IGNORECASE)
+        if inv_m:
+            result.invoice_number = inv_m.group(1).strip()
+            logger.info("Fallback numero fattura da testo PDF: %s", result.invoice_number)
 
 
 def _amount_from_dict(data: dict[str, Any], exact_keys: tuple[str, ...], substrings: tuple[str, ...]) -> float:
@@ -424,6 +508,7 @@ async def process_file(
 
     # Chiamata Factum
     try:
+        logger.info("TESTO INVIATO A FACTUM (%d caratteri):\n%s", len(text), text[:2000])
         factum_resp = await factum.parse_text(text)
     except Exception as exc:
         logger.exception("Factum parsing fallito per %s", path.name)
@@ -456,6 +541,9 @@ async def process_file(
 
     # Arricchisci FactumParseResult da payload.content (envelope v2)
     _enrich_from_payload(factum_resp)
+
+    # Fallback: se Factum non ha estratto importi, prova regex su testo PDF
+    _fallback_enrich_from_file(factum_resp.result, text)
 
     # Mappatura
     result = factum_resp.result
@@ -542,6 +630,13 @@ async def process_file(
                 )
 
         # Crea spesa/autofattura su FIC (con allegato se token disponibile)
+        # ── Circuit breaker anti-zero: blocca se importo non determinabile ──
+        if not expense.amount_net or expense.amount_net <= 0:
+            raise ValueError(
+                f"Impossibile determinare l'importo per '{path.name}'. "
+                "L'operazione è stata interrotta per evitare di creare "
+                "documenti a 0,00 € su FIC."
+            )
         fic_resp = await fic.create_expense(expense, attachment_token=attachment_token)
 
         # ✅ Genera autofattura SDI (TD17/TD18/TD19) per spese estere

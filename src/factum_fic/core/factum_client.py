@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from typing import Any
 
 import httpx
@@ -12,6 +13,8 @@ from factum_fic.core.models import FactumResponse
 from factum_fic.core.retry_policy import selective_retry
 
 _HEADERS = {"User-Agent": "factum-fic/0.1.0"}
+
+logger = logging.getLogger(__name__)
 
 # Messaggio per rate limit 429
 _RATE_LIMIT_MSG = (
@@ -71,6 +74,7 @@ class FactumClient:
             )
         response.raise_for_status()
         data = response.json()
+        logger.info("--- RAW FACTUM RESPONSE ---\n%s\n---------------------------", response.text)
         return FactumResponse(**data)
 
     async def health(self) -> bool:
