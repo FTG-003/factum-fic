@@ -46,6 +46,7 @@ class DocumentStatus(StrEnum):
     RECORDED = "recorded"
     FAILED = "failed"
     SKIPPED = "skipped"
+    PARTIAL = "partial"
 
 
 class SelfInvoiceType(StrEnum):
@@ -59,6 +60,18 @@ class SelfInvoiceType(StrEnum):
     TD17 = "TD17"
     TD18 = "TD18"
     TD19 = "TD19"
+
+
+# ── Eccezioni personalizzate ─────────────────────────────────────────────────
+
+
+class CurrencyConversionError(Exception):
+    """Sollevata quando la conversione valuta fallisce in modalità strict.
+
+    Se ``strict_currency = True`` nelle settings, qualsiasi errore di
+    connessione all'API Frankfurter (BCE) o risposta inattesa blocca
+    l'elaborazione del file, evitando registrazioni con importi errati.
+    """
 
 
 # ── Factum schemas ───────────────────────────────────────────────────────────

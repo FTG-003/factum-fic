@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     # Config file YAML (categorie, conti)
     config_file: Path | None = Field(default=None, alias="CONFIG_FILE")
 
+    # Fail-fast su valute non EUR
+    strict_currency: bool = Field(default=True, alias="STRICT_CURRENCY")
+
 
 def load_settings() -> Settings:
     """Carica settings da .env e YAML opzionale."""

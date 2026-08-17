@@ -16,6 +16,7 @@ Nessun file JSON/TMP intermedio: lo stato risiede solo nel DB SQLite.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -31,6 +32,7 @@ from factum_fic.core.factum_client import FactumClient
 from factum_fic.core.fic_client import FICClient
 from factum_fic.core.mapper import Mapper
 from factum_fic.core.models import (
+    CurrencyConversionError,
     DocumentStatus,
     FactumParseResult,
     FactumResponse,
@@ -41,6 +43,8 @@ from factum_fic.storage.queue import QueueStore
 
 logger = logging.getLogger(__name__)
 
+# ── Lock di concorrenza — evita doppia elaborazione dello stesso file ────────
+_pipeline_lock = asyncio.Lock()
 
 # Estensioni supportate per l'upload allegati PDF/immagine
 _ATTACHMENT_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".webp"}
@@ -433,6 +437,68 @@ async def _check_fic_exists(
     return None
 
 
+async def _convert_currency_strict(
+    expense: Any,
+    path: Path,
+    settings: Settings,
+) -> None:
+    """Converte l'importo in EUR se la valuta è diversa, con modalità strict.
+
+    Se ``strict_currency = True`` e la conversione fallisce, solleva
+    ``CurrencyConversionError`` bloccando l'elaborazione.
+
+    Se ``strict_currency = False``, usa fallback 1.0 con nota esplicativa.
+    """
+    if not expense.currency or expense.currency == "EUR":
+        return
+
+    from factum_fic.core.mapper import convert_currency
+
+    try:
+        rate = await convert_currency(expense.currency, "EUR")
+    except Exception as exc:
+        if settings.strict_currency:
+            raise CurrencyConversionError(
+                f"Conversione valuta fallita per '{path.name}': "
+                f"{expense.currency}->EUR. Errore: {exc}. "
+                "Imposta STRICT_CURRENCY=false per procedere con fallback 1.0."
+            ) from exc
+        rate = 1.0
+        note_fallback = (
+            f"[ATTENZIONE] Tasso di cambio non disponibile per "
+            f"{expense.currency}->EUR. Usato valore 1.0 come fallback. "
+            f"Verifica manuale consigliata."
+        )
+        if expense.notes:
+            expense.notes += "\n" + note_fallback
+        else:
+            expense.notes = note_fallback
+        logger.warning(
+            "Fallback tasso 1.0 per %s->EUR (%s): verifica manuale richiesta",
+            expense.currency, path.name,
+        )
+        return
+
+    if rate != 1.0:
+        original_net = expense.amount_net
+        expense.amount_net = round(expense.amount_net * rate, 2)
+        if expense.amount_gross is not None:
+            expense.amount_gross = round(expense.amount_gross * rate, 2)
+        note_orig = (
+            f"Importo originale: {original_net:.2f} {expense.currency} -- "
+            f"Tasso cambio {rate:.4f} applicato"
+        )
+        if expense.notes:
+            expense.notes += "\n" + note_orig
+        else:
+            expense.notes = note_orig
+        expense.currency = "EUR"
+        logger.info(
+            "Conversione valuta: %.2f %s -> %.2f EUR (tasso=%.4f)",
+            original_net, expense.currency, expense.amount_net, rate,
+        )
+
+
 # ── Pipeline principale ───────────────────────────────────────────────────────
 
 async def process_file(
@@ -445,15 +511,19 @@ async def process_file(
     settings: Settings,
     force: bool = False,
 ) -> PipelineResult:
-    """Processa un singolo file: Factum → Mapper → FIC.
+    """Processa un singolo file: Calcola hash -> Estrai -> Mappa -> FIC.
 
     Al termine sposta il file in processed/ (successo o duplicato)
     o in failed/ (errore irreversibile).
 
+    La sezione critica (hash, deduplicazione, marcatura PROCESSING) e'
+    protetta da un ``asyncio.Lock`` modulare per evitare che due
+    worker concorrenti elaborino lo stesso file simultaneamente.
+
     Args:
         path: Percorso del file da processare.
-        factum: Client Factum già inizializzato.
-        fic: Client FIC già inizializzato.
+        factum: Client Factum gia' inizializzato.
+        fic: Client FIC gia' inizializzato.
         mapper: Engine regole fiscali.
         queue: Coda SQLite per deduplicazione.
         settings: Configurazione globale.
@@ -461,45 +531,60 @@ async def process_file(
     Returns:
         PipelineResult con esito delle varie fasi.
     """
-    sha = _sha256_file(path)
-    file_event = FileEvent(
-        path=str(path),
-        sha256=sha,
-        filename=path.name,
-        size_bytes=path.stat().st_size,
-    )
-
-    # Deduplicazione — solo i completati bloccano
-    if not force and queue.exists(sha):
-        logger.info("File già processato (SHA-256 match): %s", path.name)
-        result = PipelineResult(
-            file=file_event,
-            status=DocumentStatus.SKIPPED,
-            fic_status="duplicate",
-        )
-        base_dir = Path(settings.base_storage_dir)
-        try:
-            archive_processed_file(path, base_dir)
-        except Exception as exc:
-            logger.warning("Fallito spostamento duplicato: %s", exc)
-        return result
-
     base_dir = Path(settings.base_storage_dir)
 
-    if not force:
-        queue.enqueue(sha, str(path))
-    else:
-        queue.remove(sha)
+    # ── Sezione critica: hash + dedup + lock atomico ───────────────────────
+    async with _pipeline_lock:
+        sha = _sha256_file(path)
+        file_event = FileEvent(
+            path=str(path),
+            sha256=sha,
+            filename=path.name,
+            size_bytes=path.stat().st_size,
+        )
+
+        # Deduplicazione -- solo i completati bloccano
+        if not force and queue.exists(sha):
+            logger.info("File gia' processato (SHA-256 match): %s", path.name)
+            result = PipelineResult(
+                file=file_event,
+                status=DocumentStatus.SKIPPED,
+                fic_status="duplicate",
+            )
+            try:
+                archive_processed_file(path, base_dir)
+            except Exception as exc:
+                logger.warning("Fallito spostamento duplicato: %s", exc)
+            return result
+
+        # Enqueue prima di acquire: serve che il record esista
+        # affinche' l'UPDATE atomico di acquire() funzioni.
+        if not force:
+            queue.enqueue(sha, str(path))
+        else:
+            queue.remove(sha)
+
+        # Acquisizione atomica: se un altro processo ha gia' marcato
+        # questo come 'processing' o 'completed', skip immediato.
+        if not force and not queue.acquire(sha):
+            logger.warning(
+                "File gia' in elaborazione da altro processo: %s", path.name
+            )
+            return PipelineResult(
+                file=file_event,
+                status=DocumentStatus.SKIPPED,
+                fic_status="in_progress",
+            )
 
     # ── XML / SDI: bypass totale Factum Parse, parsing deterministico locale ──
     if path.suffix.lower() == ".xml":
         # Zero chiamate di rete, zero token spesi, zero rischi di allucinazione
         try:
             file_bytes = path.read_bytes()
-            result = parse_sdi_xml(file_bytes)
+            local_result = parse_sdi_xml(file_bytes)
         except Exception as exc:
             logger.exception("XML SDI parsing fallito per %s", path.name)
-            result = PipelineResult(
+            pipeline_result = PipelineResult(
                 file=file_event,
                 status=DocumentStatus.FAILED,
                 factum_status="xml_parse_error",
@@ -509,21 +594,21 @@ async def process_file(
                 archive_failed_file(path, base_dir)
             except Exception as exc2:
                 logger.warning("Fallito spostamento errore: %s", exc2)
-            return result
+            return pipeline_result
 
         # Costruisce un FactumResponse fittizio come se fosse stato Factum a rispondere
-        # Così il resto della pipeline (mapper, FIC) funziona identico.
+        # Cosi' il resto della pipeline (mapper, FIC) funziona identico.
         factum_resp = FactumResponse(
             status="done",
             document_type="fattura",
-            result=result,
+            result=local_result,
         )
         logger.info(
-            "SDI XML parsed (locale, zero LLM): %s — %s — n. %s del %s",
-            result.supplier_name,
-            result.supplier_vat,
-            result.invoice_number,
-            result.invoice_date,
+            "SDI XML parsed (locale, zero LLM): %s -- %s -- n. %s del %s",
+            local_result.supplier_name,
+            local_result.supplier_vat,
+            local_result.invoice_number,
+            local_result.invoice_date,
         )
 
     else:
@@ -533,7 +618,7 @@ async def process_file(
             text = extract_text(path)
         except ValueError as exc:
             logger.warning("Testo non estraibile per %s: %s", path.name, exc)
-            result = PipelineResult(
+            pipeline_result = PipelineResult(
                 file=file_event,
                 status=DocumentStatus.FAILED,
                 factum_status="empty_text",
@@ -542,7 +627,7 @@ async def process_file(
                 archive_failed_file(path, base_dir)
             except Exception as exc:
                 logger.warning("Fallito spostamento errore: %s", exc)
-            return result
+            return pipeline_result
 
         # Chiamata Factum
         try:
@@ -550,7 +635,7 @@ async def process_file(
             factum_resp = await factum.parse_text(text)
         except Exception as exc:
             logger.exception("Factum parsing fallito per %s", path.name)
-            result = PipelineResult(
+            pipeline_result = PipelineResult(
                 file=file_event,
                 status=DocumentStatus.FAILED,
                 factum_status="error",
@@ -560,10 +645,10 @@ async def process_file(
                 archive_failed_file(path, base_dir)
             except Exception as exc2:
                 logger.warning("Fallito spostamento errore: %s", exc2)
-            return result
+            return pipeline_result
 
         if factum_resp.status != "done" or factum_resp.result is None:
-            result = PipelineResult(
+            pipeline_result = PipelineResult(
                 file=file_event,
                 status=DocumentStatus.FAILED,
                 factum_status=factum_resp.status,
@@ -573,9 +658,12 @@ async def process_file(
                 archive_failed_file(path, base_dir)
             except Exception as exc:
                 logger.warning("Fallito spostamento errore: %s", exc)
-            return result
+            return pipeline_result
 
-        logger.info("FACTUM RAW: %s", json.dumps(factum_resp.model_dump(mode='json'), indent=2, ensure_ascii=False))
+        logger.info(
+            "FACTUM RAW: %s",
+            json.dumps(factum_resp.model_dump(mode='json'), indent=2, ensure_ascii=False),
+        )
 
         # Arricchisci FactumParseResult da payload.content (envelope v2)
         _enrich_from_payload(factum_resp)
@@ -589,41 +677,34 @@ async def process_file(
     supplier = mapper.build_supplier(result)
     expense = mapper.build_expense(result, supplier=supplier)
 
-    # Applica conversione valuta se diversa da EUR
-    if expense.currency and expense.currency != "EUR":
+    # Applica conversione valuta se diversa da EUR (con strict mode)
+    try:
+        await _convert_currency_strict(expense, path, settings)
+    except CurrencyConversionError as exc:
+        logger.error(
+            "Conversione valuta bloccata (strict mode) per %s: %s",
+            path.name, exc,
+        )
+        queue.mark_failed(sha, str(exc))
         try:
-            from factum_fic.core.mapper import convert_currency
-            rate = await convert_currency(expense.currency, "EUR")
-            if rate != 1.0:
-                original_net = expense.amount_net
-                expense.amount_net = round(expense.amount_net * rate, 2)
-                if expense.amount_gross is not None:
-                    expense.amount_gross = round(expense.amount_gross * rate, 2)
-                note_orig = (
-                    f"Importo originale: {original_net:.2f} {expense.currency} — "
-                    f"Tasso cambio {rate:.4f} applicato"
-                )
-                if expense.notes:
-                    expense.notes += "\n" + note_orig
-                else:
-                    expense.notes = note_orig
-                expense.currency = "EUR"
-                logger.info(
-                    "Conversione valuta: %.2f %s → %.2f EUR (tasso=%.4f)",
-                    original_net, expense.currency, expense.amount_net, rate,
-                )
-        except Exception as exc:
-            logger.warning(
-                "Conversione valuta fallita per %s: %s — procedo con valuta originale",
-                path.name, exc,
-            )
+            archive_failed_file(path, base_dir)
+        except Exception as exc2:
+            logger.warning("Fallito spostamento errore valuta: %s", exc2)
+        return PipelineResult(
+            file=file_event,
+            status=DocumentStatus.FAILED,
+            factum_status="parsed",
+            fic_status="currency_error",
+            fic_error=str(exc),
+            document_type=doc_type_detected,
+        )
 
     # Cerca o crea fornitore su FIC
     try:
         await _ensure_fic_supplier(fic, supplier, expense)
     except Exception as exc:
         logger.exception("FIC supplier fallito per %s", path.name)
-        result = PipelineResult(
+        pipeline_result = PipelineResult(
             file=file_event,
             status=DocumentStatus.FAILED,
             factum_status="parsed",
@@ -635,121 +716,47 @@ async def process_file(
             archive_failed_file(path, base_dir)
         except Exception as exc2:
             logger.warning("Fallito spostamento errore: %s", exc2)
-        return result
+        return pipeline_result
+
+    # Pre-verifica esistenza documento su FIC (opzionale)
+    existing_check = await _check_fic_exists(
+        fic, expense, sha, queue, path, settings,
+    )
+    if existing_check is not None:
+        return existing_check
+
+    # ── Creazione su FIC ──────────────────────────────────────────────────
+    # Crea la spesa, poi eventualmente l'autofattura SDI
+    fic_raw = None
+    fic_self_invoice_id = None
+
+    # Ottieni attachment_token PRIMA di creare la spesa (FIC v2)
+    attachment_token: str | None = None
+    if path.suffix.lower() in _ATTACHMENT_EXTENSIONS:
+        try:
+            attachment_token = await fic.get_attachment_token(path)
+            logger.debug("Ottenuto attachment_token per %s", path.name)
+        except Exception as exc:
+            logger.warning(
+                "Upload preview fallito per %s: %s -- la spesa verra' creata senza allegato",
+                path.name,
+                exc,
+            )
 
     try:
-        # Debug: FIC payload
-        fic_payload_debug = expense.model_dump(mode='json', exclude={'entity'})
-        fic_payload_debug['entity'] = (
-            {'id': expense.entity_id, 'name': supplier.name}
-            if expense.entity_id
-            else {'name': supplier.name}
-        )
-        logger.info("FIC PAYLOAD: %s", json.dumps(fic_payload_debug, indent=2, ensure_ascii=False))
-
-        # Pre-verifica esistenza su FIC (anti-duplicazione su timeout/retry)
-        pre_check = await _check_fic_exists(
-            fic, expense, sha, queue, path, settings,
-        )
-        if pre_check is not None:
-            return pre_check
-
-        # Ottieni attachment_token PRIMA di creare la spesa (FIC v2)
-        attachment_token: str | None = None
-        if path.suffix.lower() in _ATTACHMENT_EXTENSIONS:
-            try:
-                attachment_token = await fic.get_attachment_token(path)
-                logger.debug("Ottenuto attachment_token per %s", path.name)
-            except Exception as exc:
-                logger.warning(
-                    "Upload preview fallito per %s: %s — la spesa verrà creata senza allegato",
-                    path.name,
-                    exc,
-                )
-
-        # Crea spesa/autofattura su FIC (con allegato se token disponibile)
-        # ── Circuit breaker anti-zero: blocca se importo non determinabile ──
-        if not expense.amount_net or expense.amount_net <= 0:
-            raise ValueError(
-                f"Impossibile determinare l'importo per '{path.name}'. "
-                "L'operazione è stata interrotta per evitare di creare "
-                "documenti a 0,00 € su FIC."
-            )
         fic_resp = await fic.create_expense(expense, attachment_token=attachment_token)
-
-        # ✅ Genera autofattura SDI (TD17/TD18/TD19) per spese estere
-        fic_self_invoice_id: int | None = None
-        if (
-            expense.is_autofattura
-            and settings.fic_generate_self_invoice
-            and fic_resp.id
-        ):
-            try:
-                # Determina il tipo SDI dal FactumParseResult originale
-                si_type = mapper.classify_self_invoice_type(result)
-                si_request = mapper.build_self_invoice_request(
-                    expense=expense,
-                    expense_id=fic_resp.id,
-                    numeration=settings.fic_self_invoice_numeration,
-                    vat_value=settings.fic_self_invoice_vat_value,
-                    supplier_name=supplier.name,
-                    supplier_vat_number=supplier.vat_number,
-                    supplier_country_iso=supplier.country_iso,
-                    self_invoice_type=si_type,
-                )
-                si_resp = await fic.create_issued_document(si_request)
-                fic_self_invoice_id = si_resp.id
-                logger.info(
-                    "✅ Autofattura SDI %s generata per spesa %d: id=%d",
-                    si_type.value, fic_resp.id, si_resp.id,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "⚠️ Generazione autofattura SDI fallita (spesa %d): %s",
-                    fic_resp.id, exc,
-                )
-
-        # ✅ Marca come completato SUBITO dopo la risposta FIC, PRIMA dello spostamento
-        queue.complete(sha, fic_resp.id, fic_self_invoice_id, path=str(path))
+        expense_id = fic_resp.id if fic_resp else None
         logger.info(
-            "Registrato su FIC: spesa id=%d, autofattura SDI id=%s, coda aggiornata",
-            fic_resp.id, fic_self_invoice_id,
+            "Spesa creata su FIC (id=%d): %s",
+            expense_id, expense.description,
         )
-
-        # Cattura i dati estratti da Factum PRIMA che `result` venga riassegnato
-        archive_date = result.invoice_date or None
-        archive_supplier = result.supplier_name or None
-        archive_number = result.invoice_number or None
-
-        result = PipelineResult(
-            file=file_event,
-            status=DocumentStatus.RECORDED,
-            factum_status="done",
-            fic_status="created",
-            fic_id=fic_resp.id,
-            fic_self_invoice_id=fic_self_invoice_id,
-            document_type=doc_type_detected,
-        )
-
-        try:
-            archive_processed_file(
-                path,
-                base_dir,
-                date_str=archive_date,
-                supplier_name=archive_supplier,
-                invoice_num=archive_number,
-            )
-        except Exception as exc:
-            logger.warning("Fallito spostamento successo: %s", exc)
-        return result
-
     except Exception as exc:
-        logger.exception("FIC expense fallito per %s", path.name)
-        result = PipelineResult(
+        logger.exception("FIC create_expense fallito per %s", path.name)
+        pipeline_result = PipelineResult(
             file=file_event,
             status=DocumentStatus.FAILED,
             factum_status="parsed",
-            fic_status="expense_error",
+            fic_status="create_error",
             fic_error=str(exc),
             document_type=doc_type_detected,
         )
@@ -757,4 +764,79 @@ async def process_file(
             archive_failed_file(path, base_dir)
         except Exception as exc2:
             logger.warning("Fallito spostamento errore: %s", exc2)
-        return result
+        return pipeline_result
+
+    # ── Autofattura SDI (reverse charge / acquisto estero) ────────────────
+    if (
+        expense.is_autofattura
+        and settings.fic_generate_self_invoice
+        and expense_id is not None
+    ):
+        try:
+            # Determina il tipo SDI dal FactumParseResult originale
+            si_type = mapper.classify_self_invoice_type(result)
+            si_request = mapper.build_self_invoice_request(
+                expense=expense,
+                expense_id=expense_id,
+                numeration=settings.fic_self_invoice_numeration,
+                vat_value=settings.fic_self_invoice_vat_value,
+                supplier_name=supplier.name,
+                supplier_vat_number=supplier.vat_number,
+                supplier_country_iso=supplier.country_iso,
+                self_invoice_type=si_type,
+            )
+            si_resp = await fic.create_issued_document(si_request)
+            fic_self_invoice_id = si_resp.id
+            logger.info(
+                "✅ Autofattura SDI %s generata per spesa %d: id=%d",
+                si_type.value, expense_id, fic_self_invoice_id,
+            )
+        except Exception as exc:
+            # ── RECUPERO PARZIALE: spesa OK, autofattura KO ──────────────
+            logger.error(
+                "⚠️ Generazione autofattura SDI fallita (spesa %d): %s",
+                expense_id, exc,
+            )
+            queue.mark_self_invoice_pending(
+                sha,
+                expense_id,
+                error_message=f"Autofattura SDI fallita: {exc}",
+                path=str(path),
+            )
+            # Sposta comunque il file negli archiviati (spesa registrata)
+            try:
+                archive_processed_file(path, base_dir)
+            except Exception as exc2:
+                logger.warning("Fallito spostamento post-autofattura: %s", exc2)
+            return PipelineResult(
+                file=file_event,
+                status=DocumentStatus.PARTIAL,
+                factum_status="done",
+                fic_status="self_invoice_pending",
+                fic_id=expense_id,
+                fic_self_invoice_id=None,
+                document_type=doc_type_detected,
+            )
+
+    # Completamento
+    queue.complete(
+        sha,
+        expense_id=expense_id,
+        self_invoice_id=fic_self_invoice_id,
+        path=str(path),
+    )
+    try:
+        archive_processed_file(path, base_dir)
+    except Exception as exc:
+        logger.warning("Fallito spostamento finale: %s", exc)
+
+    return PipelineResult(
+        file=file_event,
+        status=DocumentStatus.RECORDED,
+        factum_status="done",
+        fic_status="created",
+        fic_id=expense_id,
+        fic_self_invoice_id=fic_self_invoice_id,
+        document_type=doc_type_detected,
+        fic_raw=fic_raw,
+    )

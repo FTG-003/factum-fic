@@ -221,6 +221,28 @@ class FICClient:
                     return doc
         return docs[0]
 
+    # ── Recupero spesa per ID ────────────────────────────────────────────────
+
+    @selective_retry
+    async def get_expense(self, expense_id: int) -> dict[str, Any] | None:
+        """Recupera un documento di spesa da FIC per ID.
+
+        Usato da ``riprova-autofatture`` per ricostruire i dati necessari
+        alla generazione dell'autofattura SDI dopo un fallimento parziale.
+
+        Args:
+            expense_id: ID del documento di spesa su FIC.
+
+        Returns:
+            Dizionario con i dati della spesa, o None se non trovato.
+        """
+        response = await self._client.get(
+            f"/c/{self._company_id}/received_documents/{expense_id}",
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data
+
     # ── Upload attachment ─────────────────────────────────────────────────────
 
     @selective_retry

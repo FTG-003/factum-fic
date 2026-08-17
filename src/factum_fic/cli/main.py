@@ -27,6 +27,7 @@ _ALIASES: dict[str, str] = {
     "storico": "history",
     "elabora": "sync",
     "auto": "watch",
+    "riprova-autofatture": "riprova-autofatture",
 }
 
 
@@ -51,7 +52,7 @@ app = typer.Typer(
     no_args_is_help=True,
     epilog=(
         "Alias italiani: configura=setup, stato=status, storico=history, "
-        "elabora=sync, auto=watch"
+        "elabora=sync, auto=watch, riprova-autofatture=riprova-autofatture"
     ),
 )
 
@@ -60,6 +61,135 @@ def _version_cb(value: bool) -> None:
     if value:
         console.print(f"factum-fic v{__version__}")
         raise typer.Exit
+
+
+@app.command()
+def riprova_autofatture(
+    config_file: str = typer.Option("", "--config", "-c", help="Percorso YAML categorie"),
+) -> None:
+    """Riprova la generazione delle autofatture SDI per le spese in stato
+    SELF_INVOICE_PENDING.
+
+    Il comando recupera dalla coda locale tutti i file la cui spesa è stata
+    creata con successo su FIC ma la cui autofattura SDI è fallita, e tenta
+    nuovamente la generazione.
+
+    Alias: riprova-autofatture
+    """
+    from factum_fic.cli.verify import verify_and_bind
+    from factum_fic.core.factum_client import FactumClient
+    from factum_fic.core.fic_client import FICClient
+    from factum_fic.core.mapper import Mapper
+    from factum_fic.storage.queue import QueueStore
+
+    settings = load_settings()
+    yaml_cfg = load_yaml_config(Path(config_file) if config_file else settings.config_file)
+    mapper = Mapper(yaml_cfg)
+    queue = QueueStore()
+
+    pending = queue.get_pending_self_invoices()
+    if not pending:
+        print_ok("Nessuna autofattura in attesa di riprova.")
+        return
+
+    print_info(f"Trovate {len(pending)} autofatture da riprovare...")
+
+    async def _run() -> None:
+        factum = FactumClient(settings)
+        fic = FICClient(settings)
+        try:
+            await verify_and_bind(fic, factum)
+            riuscite = 0
+            fallite = 0
+
+            for item in pending:
+                sha = item["sha256"]
+                expense_id = item["fic_expense_id"]
+                print_info(f"  Riprovo autofattura per spesa id={expense_id} (SHA={sha[:12]}...)")
+
+                # Recupera la spesa da FIC per ricostruire i dati
+                try:
+                    expense_data = await fic.get_expense(expense_id)
+                except Exception as exc:
+                    print_error(f"    Impossibile recuperare spesa {expense_id}: {exc}")
+                    fallite += 1
+                    continue
+
+                if not expense_data:
+                    print_error(f"    Spesa {expense_id} non trovata su FIC")
+                    fallite += 1
+                    continue
+
+                # Costruisce la request per l'autofattura usando i dati
+                # della spesa già registrata
+                try:
+                    supplier_info = expense_data.get("data", {}).get("entity", {})
+                    supplier_name = (supplier_info or {}).get("name", "") or ""
+                    supplier_vat = (supplier_info or {}).get("vat_number", "") or None
+                    supplier_country = (supplier_info or {}).get("country_iso", "XX") or "XX"
+
+                    amount_net = float(expense_data.get("data", {}).get("amount_net", 0) or 0)
+                    amount_vat = float(expense_data.get("data", {}).get("amount_vat", 0) or 0)
+                    amount_gross = float(expense_data.get("data", {}).get("amount_gross", 0) or 0)
+                    date = expense_data.get("data", {}).get("date", "") or ""
+                    description = expense_data.get("data", {}).get("description", "") or ""
+                    notes = expense_data.get("data", {}).get("notes", "") or ""
+                    currency = expense_data.get("data", {}).get("currency", "EUR") or "EUR"
+
+                    if amount_net <= 0 and amount_gross > 0:
+                        amount_net = amount_gross
+                        amount_vat = 0.0
+
+                    # Determina tipologia SDI
+                    self_invoice_type = mapper.classify_self_invoice_type(
+                        supplier_country_iso=supplier_country,
+                        supplier_vat_number=supplier_vat,
+                    )
+
+                    self_invoice_request = mapper.build_self_invoice_request(
+                        supplier_name=supplier_name,
+                        supplier_vat_number=supplier_vat or "",
+                        supplier_country_iso=supplier_country,
+                        amount_net=amount_net,
+                        amount_vat=amount_vat,
+                        amount_gross=amount_gross,
+                        date=date,
+                        description=description,
+                        notes=notes,
+                        currency=currency,
+                        self_invoice_type=self_invoice_type,
+                        original_document_id=expense_id,
+                        original_document_description=description,
+                    )
+
+                    response = await fic.create_issued_document(
+                        self_invoice_request,
+                    )
+                    fic_self_invoice_id = response.id
+
+                    # Aggiorna la coda
+                    queue.complete(
+                        sha,
+                        expense_id=expense_id,
+                        self_invoice_id=fic_self_invoice_id,
+                    )
+                    print_ok(f"    Autofattura creata: id={fic_self_invoice_id}")
+                    riuscite += 1
+
+                except Exception as exc:
+                    print_error(
+                        f"    Autofattura ancora fallita per spesa {expense_id}: {exc}"
+                    )
+                    fallite += 1
+
+            print_info(f"Riprova completata: {riuscite} riuscite, {fallite} fallite")
+
+        finally:
+            await factum.close()
+            await fic.close()
+            queue.close()
+
+    asyncio.run(_run())
 
 
 @app.callback()

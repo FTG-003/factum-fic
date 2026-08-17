@@ -130,6 +130,7 @@ def test_collect_status_api_down(queue: QueueStore) -> None:
         "self_invoices": 0,
         "errors": 0,
         "queued": 0,
+        "pending_si": 0,
     }
 
 

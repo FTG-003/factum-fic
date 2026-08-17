@@ -12,11 +12,11 @@ Schema (v2):
 
     - sha256 TEXT PRIMARY KEY: hash del file
     - file_path TEXT: percorso originale del file
-    - status TEXT: queued | processing | completed | failed
+    - status TEXT: queued | processing | completed | failed | SELF_INVOICE_PENDING
     - fic_expense_id INTEGER: ID spesa su FIC (se completato)
     - fic_self_invoice_id INTEGER NULL: ID autofattura SDI su FIC
     - processed_at TEXT: timestamp completamento
-    - error_message TEXT NULL: ultimo errore (per status=failed)
+    - error_message TEXT NULL: ultimo errore (per status=failed o SELF_INVOICE_PENDING)
     - created_at / updated_at: timestamp di audit
 
 La migrazione dallo schema legacy (colonne ``path`` e ``fic_id``) avviene
@@ -81,7 +81,6 @@ class QueueStore:
                 "UPDATE queue SET file_path = path "
                 "WHERE file_path = '' AND path != ''"
             )
-            # Rimuove la vecchia colonna NOT NULL senza default
             self._conn.execute("ALTER TABLE queue DROP COLUMN path")
         if "fic_id" in existing:
             self._conn.execute(
@@ -91,7 +90,89 @@ class QueueStore:
 
         self._conn.commit()
 
-    # ── Query base ────────────────────────────────────────────────────────
+    # ── Lock atomico (concorrenza) ────────────────────────────────────────
+
+    def acquire(self, sha256: str) -> bool:
+        """Transizione atomica allo stato 'processing'.
+
+        Imposta ``status = 'processing'`` SOLO se l'item non è già
+        in stato 'processing' o 'completed'. Previene doppie elaborazioni
+        concorrenti dello stesso file.
+
+        Args:
+            sha256: Hash del file da acquisire.
+
+        Returns:
+            True se l'acquisizione è riuscita, False se già in corso o
+            già completato.
+        """
+        cur = self._conn.execute(
+            "UPDATE queue SET status = 'processing', updated_at = datetime('now') "
+            "WHERE sha256 = ? AND status NOT IN ('processing', 'completed')",
+            (sha256,),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    # ── Gestione SELF_INVOICE_PENDING ─────────────────────────────────────
+
+    def mark_self_invoice_pending(
+        self,
+        sha256: str,
+        expense_id: int,
+        error_message: str | None = None,
+        *,
+        path: str | None = None,
+    ) -> None:
+        """Marca un item come SELF_INVOICE_PENDING.
+
+        Usato quando la spesa FIC è stata creata con successo ma la
+        generazione dell'autofattura SDI (TD17/18/19) è fallita.
+        Il record conserva l'``expense_id`` per consentire il retry
+        tramite ``riprova-autofatture``.
+
+        Args:
+            sha256: Hash del file.
+            expense_id: ID della spesa già creata su FIC.
+            error_message: Messaggio di errore dell'autofattura fallita.
+            path: Percorso originale del file.
+        """
+        self._conn.execute(
+            "INSERT INTO queue (sha256, file_path, status, fic_expense_id, "
+            "error_message, created_at, updated_at) "
+            "VALUES (?, ?, 'SELF_INVOICE_PENDING', ?, ?, "
+            "datetime('now'), datetime('now')) "
+            "ON CONFLICT(sha256) DO UPDATE SET "
+            "status='SELF_INVOICE_PENDING', "
+            "fic_expense_id=excluded.fic_expense_id, "
+            "error_message=excluded.error_message, "
+            "updated_at=datetime('now')",
+            (sha256, path or "", expense_id, error_message),
+        )
+        self._conn.commit()
+
+    def get_pending_self_invoices(self) -> list[dict]:
+        """Restituisce tutti i record in stato SELF_INVOICE_PENDING.
+
+        Returns:
+            Lista di dizionari con chiavi: sha256, file_path,
+            fic_expense_id, error_message.
+        """
+        cur = self._conn.execute(
+            "SELECT sha256, file_path, fic_expense_id, error_message "
+            "FROM queue WHERE status = 'SELF_INVOICE_PENDING'",
+        )
+        return [
+            {
+                "sha256": row[0],
+                "file_path": row[1],
+                "fic_expense_id": row[2],
+                "error_message": row[3],
+            }
+            for row in cur.fetchall()
+        ]
+
+    # ── Query base ──────────────────────────────────────────────────────
 
     def exists(self, sha256: str) -> bool:
         """Verifica se un file (per hash) è già stato processato con successo.
@@ -146,34 +227,52 @@ class QueueStore:
         self_invoice_id: int | None = None,
         *,
         path: str | None = None,
+        status: str = "completed",
     ) -> None:
-        """Registra un file come COMPLETATO con i due ID FIC collegati.
+        """Registra un file come completato o aggiorna self_invoice_id.
 
-        Inserisce o aggiorna la riga con status='completed', registrando
-        sia l'ID della spesa creata (``fic_expense_id``) sia, quando
-        disponibile, l'ID dell'autofattura SDI generata
-        (``fic_self_invoice_id``).
+        Se il record esiste già con status='SELF_INVOICE_PENDING' e viene
+        chiamato con un ``self_invoice_id``, aggiorna solo il campo
+        ``fic_self_invoice_id`` e passa a 'completed' preservando
+        l'``expense_id`` già registrato.
 
         Args:
             sha256: Hash SHA-256 del file elaborato.
             expense_id: ID del documento di spesa creato su FIC.
-            self_invoice_id: ID dell'autofattura SDI (TD17/18/19) generata,
-                o None se non applicabile (es. spese italiane).
-            path: Percorso originale del file (facoltativo, popolato solo
-                al primo inserimento).
+            self_invoice_id: ID dell'autofattura SDI (TD17/18/19) generata.
+            path: Percorso originale del file.
+            status: Stato da impostare (default 'completed').
         """
+        # Caso speciale: aggiornamento parziale dopo SELF_INVOICE_PENDING
+        existing = self.get(sha256)
+        if existing and existing["status"] == "SELF_INVOICE_PENDING":
+            self._conn.execute(
+                "UPDATE queue SET "
+                "status = ?, "
+                "fic_self_invoice_id = ?, "
+                "processed_at = datetime('now'), "
+                "error_message = NULL, "
+                "updated_at = datetime('now') "
+                "WHERE sha256 = ?",
+                (status, self_invoice_id, sha256),
+            )
+            self._conn.commit()
+            return
+
         self._conn.execute(
             "INSERT INTO queue (sha256, file_path, status, fic_expense_id, "
             "fic_self_invoice_id, processed_at, created_at, updated_at) "
-            "VALUES (?, ?, 'completed', ?, ?, datetime('now'), "
+            "VALUES (?, ?, ?, ?, ?, datetime('now'), "
             "datetime('now'), datetime('now')) "
             "ON CONFLICT(sha256) DO UPDATE SET "
-            "status='completed', "
+            "status=excluded.status, "
             "fic_expense_id=excluded.fic_expense_id, "
-            "fic_self_invoice_id=excluded.fic_self_invoice_id, "
+            "fic_self_invoice_id=COALESCE(excluded.fic_self_invoice_id, "
+            "fic_self_invoice_id), "
             "processed_at=datetime('now'), "
+            "error_message=NULL, "
             "updated_at=datetime('now')",
-            (sha256, path or "", expense_id, self_invoice_id),
+            (sha256, path or "", status, expense_id, self_invoice_id),
         )
         self._conn.commit()
 
@@ -237,6 +336,7 @@ class QueueStore:
             - self_invoices: autofatture SDI generate (fic_self_invoice_id non null)
             - errors: item falliti in coda
             - queued: item in attesa
+            - pending_si: item in attesa retry autofattura
         """
         def _count(sql: str) -> int:
             row = self._conn.execute(sql).fetchone()
@@ -252,6 +352,9 @@ class QueueStore:
             ),
             "errors": _count("SELECT COUNT(*) FROM queue WHERE status = 'failed'"),
             "queued": _count("SELECT COUNT(*) FROM queue WHERE status = 'queued'"),
+            "pending_si": _count(
+                "SELECT COUNT(*) FROM queue WHERE status = 'SELF_INVOICE_PENDING'"
+            ),
         }
 
     # ── Cronologia (history) ─────────────────────────────────────────────
