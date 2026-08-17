@@ -1,7 +1,14 @@
-# CI — Ruff lint + pytest suite
+# CI — Ruff lint + pytest suite con mocking
 #
-# Si attiva su ogni push (qualsiasi branch) e su ogni PR verso main.
-# Blocca il merge se lint o test falliscono.
+# REGOLE DI SICUREZZA:
+# - I test automatici (push/PR) USANO ESCLUSIVAMENTE env MOCK.
+#   Nessuna chiamata API reale, nessun credito consumato, nessuna chiave esposta.
+# - Le credenziali reali (FACTUM_API_KEY, FIC_API_KEY, FIC_COMPANY_ID)
+#   sono riservate ESCLUSIVAMENTE ai workflow manuali di live smoke test
+#   (workflow_dispatch).
+# - I secrets GitHub NON sono mai esposti in output di test automatici.
+#
+# Lingua: Italiano (it-IT)
 
 name: CI
 
@@ -10,6 +17,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      smoke_test:
+        description: "Esegui live smoke test con credenziali reali"
+        type: boolean
+        default: false
 
 jobs:
   lint:
@@ -24,7 +37,7 @@ jobs:
       - run: uv run ruff check .
 
   test:
-    name: Pytest
+    name: Pytest (mock)
     runs-on: ubuntu-latest
     needs: lint
     steps:
@@ -35,8 +48,34 @@ jobs:
       - run: uv sync --all-extras --dev
       - run: uv run pytest -q --tb=short
         env:
-          FACTUM_API_URL: https://api.factum.pyragogy.org
+          # ── Credenziali MOCK — nessuna chiamata API reale ──────────
+          # I test automatizzati usano mock via pytest fixtures.
+          # Questi valori non vengono mai inviati a server reali.
+          FACTUM_API_KEY: "mock_factum_key_ci_testing"
+          FACTUM_API_URL: "https://api.factum.pyragogy.org"
+          FIC_API_KEY: "mock_fic_key_ci_testing"
+          FIC_COMPANY_ID: "000000"
+          FIC_BASE_URL: "https://api-v2.fattureincloud.it"
+          STRICT_CURRENCY: "true"
+
+  # ── Smoke test opzionale (solo su workflow_dispatch) ──────────────
+  smoke:
+    name: Smoke test (credenziali reali)
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.smoke_test }}
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - run: uv sync --all-extras --dev
+      - name: Smoke test live
+        run: |
+          uv run factum-fic check
+        env:
+          # ── Credenziali reali — usate solo per smoke test manuali ──
+          # ATTENZIONE: questi secreti non vanno mai usati in workflow automatici.
           FACTUM_API_KEY: ${{ secrets.FACTUM_API_KEY }}
-          FIC_BASE_URL: https://api-v2.fattureincloud.it
           FIC_API_KEY: ${{ secrets.FIC_API_KEY }}
           FIC_COMPANY_ID: ${{ secrets.FIC_COMPANY_ID }}

@@ -1,22 +1,7 @@
 <div align="center">
-  <img src=".github/assets/logo.png" alt="factum-fic" width="180" height="180"/>
-  <h1>factum-fic 🧾✨</h1>
-  <p><strong>Da fattura digitale a Fatture in Cloud — un comando, zero sforzo.</strong></p>
-  <p>
-    <a href="#"><img src="https://img.shields.io/github/actions/workflow/status/pyragogy/factum-fic/ci.yml?branch=main&label=CI&logo=github" alt="CI"></a>
-    <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue.svg" alt="License"></a>
-    <a href="pyproject.toml"><img src="https://img.shields.io/badge/Python-3.13%2B-blue" alt="Python"></a>
-    <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/badge/code%20style-ruff-000000.svg" alt="Ruff"></a>
-    <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/Contributions-welcome-brightgreen" alt="Contributions welcome"></a>
-  </p>
-  <p>
-    <a href="#-caratteristiche">Caratteristiche</a> •
-    <a href="#-esempio-veloce">Esempio</a> •
-    <a href="#-installazione">Installazione</a> •
-    <a href="#-guida-rapida">Guida</a> •
-    <a href="#-architettura">Architettura</a> •
-    <a href="#-licenza">Licenza</a>
-  </p>
+  <img src=".github/assets/logo.png" alt="Factum FIC Logo" width="140" />
+  <h1>Factum FIC</h1>
+  <p>Automazione contabile deterministica e sincronizzazione con Fatture in Cloud</p>
 </div>
 
 ---
