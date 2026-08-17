@@ -146,14 +146,6 @@ def test_document_type_fattura() -> None:
 
 
 def test_is_reverse_charge_false_with_iva() -> None:
-    result = parse_sdi_xml(_minimal_xml())
-    assert result.raw["is_reverse_charge"] is False
-
-
-# ── Reverse charge / zero IVA ────────────────────────────────────────────────
-
-
-def test_is_reverse_charge_false_with_iva() -> None:
     """DE fornitore, IVA=3.45 > 0 → RC=False (fornitore estero MA IVA applicata)."""
     result = parse_sdi_xml(_minimal_xml())
     assert result.raw["is_reverse_charge"] is False
@@ -284,10 +276,15 @@ def test_person_name_from_nome_cognome() -> None:
 
 def test_supplier_vat_fallback_codice_fiscale() -> None:
     """Senza IdFiscaleIVA/IdCodice, usa CodiceFiscale."""
+    import re
+
     xml = _minimal_xml().decode("utf-8")
-    xml = xml.replace(
-        "<IdFiscaleIVA>\n                        <IdPaese>DE</IdPaese>\n                        <IdCodice>812871812</IdCodice>\n                    </IdFiscaleIVA>",
+    # Rimuove il blocco IdFiscaleIVA (contenuto variabile) e inserisce CodiceFiscale
+    xml = re.sub(
+        r"<IdFiscaleIVA>.*?</IdFiscaleIVA>",
         "<CodiceFiscale>TRZFRZ80M16A794Y</CodiceFiscale>",
+        xml,
+        flags=re.DOTALL,
     )
     result = parse_sdi_xml(xml.encode("utf-8"))
     assert result.supplier_vat == "TRZFRZ80M16A794Y"

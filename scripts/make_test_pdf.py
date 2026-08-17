@@ -42,8 +42,8 @@ def make_test_pdf(out_path: str | Path) -> Path:
     c = canvas.Canvas(str(out), pagesize=A4)
     w, h = A4
     m = 20 * mm
-    LEFT = m
-    RIGHT = w - m
+    left = m
+    right = w - m
 
     def line(y: float, text: str, size: int = 10, font: str = "Helvetica") -> None:
         _line(c, y, text, size, font)
@@ -59,29 +59,29 @@ def make_test_pdf(out_path: str | Path) -> Path:
 
     # -- Intestazione azienda --
     c.setFont("Helvetica-Bold", 16)
-    c.drawString(LEFT, y, "Hetzner Online GmbH")
+    c.drawString(left, y, "Hetzner Online GmbH")
     y -= 6 * mm
 
     c.setFont("Helvetica", 9)
-    c.drawString(LEFT, y, "Industriestr. 25, 91710 Gunzenhausen, Deutschland")
+    c.drawString(left, y, "Industriestr. 25, 91710 Gunzenhausen, Deutschland")
     y -= 4 * mm
-    c.drawString(LEFT, y, "Tel.: +49 (0) 9831 505-0  |  Fax: +49 (0) 9831 505-3")
+    c.drawString(left, y, "Tel.: +49 (0) 9831 505-0  |  Fax: +49 (0) 9831 505-3")
     y -= 4 * mm
-    c.drawString(LEFT, y, "E-Mail: invoice@hetzner.com  |  Web: www.hetzner.com")
+    c.drawString(left, y, "E-Mail: invoice@hetzner.com  |  Web: www.hetzner.com")
     y -= 4 * mm
-    c.drawString(LEFT, y, "USt-IdNr. / VAT ID: DE812875199  |  HRB 6089 Amtsgericht Gunzenhausen")
+    c.drawString(left, y, "USt-IdNr. / VAT ID: DE812875199  |  HRB 6089 Amtsgericht Gunzenhausen")
     y -= 8 * mm
 
     # -- Linea separatrice --
     c.setStrokeColorRGB(0.8, 0.2, 0.2)  # rosso Hetzner
     c.setLineWidth(0.5)
-    c.line(LEFT, y, RIGHT, y)
+    c.line(left, y, right, y)
     y -= 6 * mm
 
     # -- Dati fattura --
     c.setStrokeColorRGB(0, 0, 0)
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(LEFT, y, "RECHNUNG / INVOICE")
+    c.drawString(left, y, "RECHNUNG / INVOICE")
     y -= 8 * mm
 
     c.setFont("Helvetica", 10)
@@ -92,39 +92,39 @@ def make_test_pdf(out_path: str | Path) -> Path:
         ("Zahlungsziel / Payment Terms:", "14 Tage netto / 14 days net"),
     ]
     for label, val in invoice_lines:
-        c.drawString(LEFT, y, f"{label}  {val}")
+        c.drawString(left, y, f"{label}  {val}")
         y -= 5 * mm
 
     y -= 4 * mm
 
     # -- Kundendaten (cliente) --
     c.setFont("Helvetica-Bold", 10)
-    c.drawString(LEFT, y, "Kunde / Customer:")
+    c.drawString(left, y, "Kunde / Customer:")
     y -= 5 * mm
     c.setFont("Helvetica", 10)
-    c.drawString(LEFT, y, "Fatture in Cloud S.r.l.")
+    c.drawString(left, y, "Fatture in Cloud S.r.l.")
     y -= 4 * mm
-    c.drawString(LEFT, y, "Via del Commercio 10")
+    c.drawString(left, y, "Via del Commercio 10")
     y -= 4 * mm
-    c.drawString(LEFT, y, "37135 Verona (VR) — Italia")
+    c.drawString(left, y, "37135 Verona (VR) — Italia")
     y -= 4 * mm
-    c.drawString(LEFT, y, "VAT IT12345678901  |  Cod. SDI: 0123456789")
+    c.drawString(left, y, "VAT IT12345678901  |  Cod. SDI: 0123456789")
     y -= 8 * mm
 
     # -- Linea separatrice --
-    c.line(LEFT, y, RIGHT, y)
+    c.line(left, y, right, y)
     y -= 6 * mm
 
     # -- Intestazione tabella servizi --
     c.setFont("Helvetica-Bold", 9)
-    cols_x = [LEFT, LEFT + 8 * mm, LEFT + 110 * mm, LEFT + 140 * mm, LEFT + 165 * mm]
+    cols_x = [left, left + 8 * mm, left + 110 * mm, left + 140 * mm, left + 165 * mm]
     c.drawString(cols_x[0], y, "Pos.")
     c.drawString(cols_x[1], y, "Beschreibung / Description")
     c.drawString(cols_x[2], y, "Menge")
     c.drawString(cols_x[3], y, "Einzelpreis")
-    c.drawRightString(RIGHT, y, "Nettobetrag")
+    c.drawRightString(right, y, "Nettobetrag")
     y -= 3 * mm
-    c.line(LEFT, y, RIGHT, y)
+    c.line(left, y, right, y)
     y -= 5 * mm
 
     # -- Righe servizi --
@@ -138,11 +138,11 @@ def make_test_pdf(out_path: str | Path) -> Path:
         c.drawString(cols_x[1], y, desc)
         c.drawString(cols_x[2], y, qty)
         c.drawString(cols_x[3], y, price)
-        c.drawRightString(RIGHT, y, net)
+        c.drawRightString(right, y, net)
         y -= 5 * mm
 
     y -= 3 * mm
-    c.line(LEFT, y, RIGHT, y)
+    c.line(left, y, right, y)
     y -= 6 * mm
 
     # -- Totali --
@@ -153,8 +153,8 @@ def make_test_pdf(out_path: str | Path) -> Path:
     ]
     for label, val in totals:
         c.setFont("Helvetica-Bold", 11 if "Gesamt" in label else 10)
-        c.drawString(LEFT, y, label)
-        c.drawRightString(RIGHT, y, val)
+        c.drawString(left, y, label)
+        c.drawRightString(right, y, val)
         y -= 6 * mm
 
     y -= 4 * mm
@@ -169,14 +169,14 @@ def make_test_pdf(out_path: str | Path) -> Path:
         "Netto EUR 50,40 — Iva 0% (Reverse Charge) — Totale EUR 50,40.",
     ]
     for rc_line in rc_lines:
-        c.drawString(LEFT, y, rc_line)
+        c.drawString(left, y, rc_line)
         y -= 3.5 * mm
 
     y -= 6 * mm
 
     # -- Footer pagina 1 --
     c.setFont("Helvetica", 7)
-    c.drawString(LEFT, 10 * mm, "Seite 1/2  |  Hetzner Online GmbH  |  Rechnung 20260817-50")
+    c.drawString(left, 10 * mm, "Seite 1/2  |  Hetzner Online GmbH  |  Rechnung 20260817-50")
 
     c.showPage()
     y = h - m
@@ -186,7 +186,7 @@ def make_test_pdf(out_path: str | Path) -> Path:
     # ═══════════════════════════════════════════════════════════
 
     c.setFont("Helvetica-Bold", 12)
-    c.drawString(LEFT, y, "Allgemeine Geschäftsbedingungen / Terms & Conditions")
+    c.drawString(left, y, "Allgemeine Geschäftsbedingungen / Terms & Conditions")
     y -= 8 * mm
 
     c.setFont("Helvetica", 9)
@@ -230,13 +230,13 @@ def make_test_pdf(out_path: str | Path) -> Path:
         "Diese Rechnung wurde maschinell erstellt und ist ohne Unterschrift gültig.",
     ]
     for t in terms:
-        c.drawString(LEFT, y, t)
+        c.drawString(left, y, t)
         y -= 3.8 * mm
 
     # -- Footer pagina 2 --
     y = 10 * mm
     c.setFont("Helvetica", 7)
-    c.drawString(LEFT, y, "Seite 2/2  |  Hetzner Online GmbH  |  Rechnung 20260817-50")
+    c.drawString(left, y, "Seite 2/2  |  Hetzner Online GmbH  |  Rechnung 20260817-50")
 
     c.save()
     return out
