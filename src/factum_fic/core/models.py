@@ -48,6 +48,19 @@ class DocumentStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+class SelfInvoiceType(StrEnum):
+    """Tipologia autofattura SDI per acquisti esteri (art. 17 c. 2 DPR 633/72).
+
+    - TD17: acquisto da fornitore Extra-UE
+    - TD18: acquisto da fornitore Intra-UE soggetto passivo (con P.IVA)
+    - TD19: acquisto da fornitore Intra-UE non soggetto / non identificato (senza P.IVA)
+    """
+
+    TD17 = "TD17"
+    TD18 = "TD18"
+    TD19 = "TD19"
+
+
 # ── Factum schemas ───────────────────────────────────────────────────────────
 
 
@@ -173,6 +186,48 @@ class FICExpenseResponse(BaseModel):
     status: str = ""
 
 
+class FICCreateIssuedDocumentRequest(BaseModel):
+    """Request per creare un documento emesso (autofattura SDI) su FIC.
+
+    Genera una bozza di ``issued_documents`` di tipo ``self_supplier_invoice``
+    per acquisti da fornitori esteri (art. 17 c. 2 DPR 633/72).
+
+    Il classificatore SDI determina la tipologia:
+    - TD17: Extra-UE (paese non UE)
+    - TD18: Intra-UE soggetto passivo (paese UE con P.IVA)
+    - TD19: Intra-UE non soggetto / non identificato (paese UE senza P.IVA)
+
+    Il payload include il nodo ``e_invoice`` con i dati SDI (`ei_raw`)
+    per la trasmissione telematica al Sistema di Interscambio.
+    """
+
+    entity_id: int
+    date: str = ""
+    numeration: str = "/TD"
+    description: str = ""
+    amount_net: float = 0.0
+    amount_vat: float = 0.0
+    amount_gross: float = 0.0
+    vat_value: int = 22
+    self_invoice_type: SelfInvoiceType = SelfInvoiceType.TD17
+    notes: str = ""
+    original_document_id: int | None = None
+    original_document_description: str = ""
+    # Dati fornitore estero per SDI (ei_raw)
+    supplier_name: str = ""
+    supplier_vat_number: str | None = None
+    supplier_country_iso: str = "XX"
+    supplier_tax_code: str | None = None
+
+
+class FICIssuedDocumentResponse(BaseModel):
+    """Risposta da FIC dopo creazione documento emesso."""
+
+    id: int = 0
+    type: str = ""
+    status: str = ""
+
+
 # ── Pipeline schemas ─────────────────────────────────────────────────────────
 
 
@@ -193,6 +248,7 @@ class PipelineResult(BaseModel):
     factum_error: str | None = None
     fic_status: str = ""
     fic_id: int | None = None
+    fic_self_invoice_id: int | None = None
     fic_error: str | None = None
     document_type: DocumentType = DocumentType.UNKNOWN
     status: DocumentStatus = DocumentStatus.PENDING

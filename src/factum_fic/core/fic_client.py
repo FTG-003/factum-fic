@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -11,12 +12,15 @@ import httpx
 from factum_fic.config import Settings
 from factum_fic.core.models import (
     FICCreateExpenseRequest,
+    FICCreateIssuedDocumentRequest,
     FICCreateSupplierRequest,
     FICExpenseResponse,
+    FICIssuedDocumentResponse,
 )
 from factum_fic.core.retry_policy import selective_retry
 
 _HEADERS = {"User-Agent": "factum-fic/0.1.0"}
+logger = logging.getLogger(__name__)
 
 
 class FICClient:
@@ -26,6 +30,14 @@ class FICClient:
         self._base_url = settings.fic_base_url.rstrip("/")
         self._api_key = settings.fic_api_key
         self._company_id = settings.fic_company_id
+        self._auto_paid = settings.fic_auto_paid
+        self._payment_account_name = settings.fic_payment_account_name
+        self._payment_account_id: int | None = settings.fic_payment_account_id
+        self._payment_account_resolved: int | None = None
+        self._payment_account_name_resolved: str | None = None
+        self._generate_self_invoice = settings.fic_generate_self_invoice
+        self._self_invoice_numeration = settings.fic_self_invoice_numeration
+        self._self_invoice_vat_value = settings.fic_self_invoice_vat_value
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
             headers={
@@ -38,6 +50,91 @@ class FICClient:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+    @selective_retry
+    async def get_payment_accounts(self) -> list[dict[str, Any]]:
+        """Recupera l'elenco dei conti di pagamento disponibili su FIC v2.
+
+        Returns:
+            Lista di dizionari con id, name, type, iban, sia, virtual.
+
+        Raises:
+            httpx.HTTPStatusError: Se l'API rifiuta la richiesta.
+        """
+        response = await self._client.get(
+            f"/c/{self._company_id}/info/payment_accounts",
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data.get("data", [])
+
+    async def _resolve_payment_account(self) -> int | None:
+        """Risolve il conto di pagamento da usare per auto-pagamento.
+
+        Ordine di priorità:
+          1. FIC_PAYMENT_ACCOUNT_ID (override esplicito via settings)
+          2. Cache interna (evita chiamate API ripetute)
+          3. FIC_PAYMENT_ACCOUNT_NAME → cerca per nome su FIC
+          4. Fallback: primo conto disponibile
+
+        Returns:
+            ID del conto di pagamento, o None se non disponibile.
+        """
+        # Override esplicito via ID
+        if self._payment_account_id is not None:
+            self._payment_account_name_resolved = self._payment_account_name or "Override (ID)"
+            return self._payment_account_id
+
+        # Cache già risolta
+        if self._payment_account_resolved is not None:
+            return self._payment_account_resolved
+
+        # Query API
+        try:
+            accounts = await self.get_payment_accounts()
+        except Exception:
+            logger.warning("Impossibile recuperare conti di pagamento da FIC")
+            return None
+
+        if not accounts:
+            logger.warning("Nessun conto di pagamento disponibile su FIC")
+            return None
+
+        # Match per nome (case-insensitive)
+        if self._payment_account_name:
+            for acc in accounts:
+                if acc.get("name", "").lower() == self._payment_account_name.lower():
+                    self._payment_account_resolved = acc.get("id")
+                    self._payment_account_name_resolved = acc.get("name")
+                    return self._payment_account_resolved
+
+        # Fallback: primo conto disponibile
+        self._payment_account_resolved = accounts[0].get("id")
+        self._payment_account_name_resolved = accounts[0].get("name", "?")
+        logger.info(
+            "Usato conto di pagamento '%s' (id=%s) come fallback",
+            self._payment_account_name_resolved,
+            self._payment_account_resolved,
+        )
+        return self._payment_account_resolved
+
+    async def resolve_payment_account(self) -> dict[str, Any] | None:
+        """Risolve il conto di pagamento attivo per l'auto-pagamento spese.
+
+        Espone al dashboard ``factum-fic status`` il conto che verrà usato
+        per marcare le spese come saldate (FIC_AUTO_PAID).
+
+        Returns:
+            Dizionario con ``id`` e ``name`` del conto risolto,
+            o None se nessun conto è disponibile/configurato.
+        """
+        account_id = await self._resolve_payment_account()
+        if account_id is None:
+            return None
+        return {
+            "id": account_id,
+            "name": self._payment_account_name_resolved or "—",
+        }
 
     @selective_retry
     async def create_supplier(self, supplier: FICCreateSupplierRequest) -> dict[str, Any]:
@@ -191,18 +288,95 @@ class FICClient:
     # ── Creazione documento ───────────────────────────────────────────────────
 
     @selective_retry
+    async def create_issued_document(
+        self,
+        doc: FICCreateIssuedDocumentRequest,
+    ) -> FICIssuedDocumentResponse:
+        """Crea un documento emesso (autofattura SDI) su FIC.
+
+        Genera una bozza di ``issued_documents`` di tipo ``self_supplier_invoice``
+        per acquisti da fornitori esteri (art. 17 c. 2 DPR 633/72), con IVA
+        calcolata sull'imponibile e i nodi SDI ``e_invoice`` (ei_raw)
+        per la trasmissione telematica al Sistema di Interscambio.
+
+        La classificazione SDI (TD17/18/19) è determinata dal mapper
+        ``classify_self_invoice_type()`` e passata via ``doc.self_invoice_type``.
+
+        Args:
+            doc: Dati dell'autofattura SDI da creare.
+
+        Returns:
+            FICIssuedDocumentResponse con id e stato del documento creato.
+        """
+        gross = doc.amount_gross or (doc.amount_net + doc.amount_vat)
+        fic_payload: dict[str, Any] = {
+            "type": "self_supplier_invoice",
+            "entity": {"id": doc.entity_id},
+            "date": doc.date,
+            "numeration": doc.numeration,
+            "description": doc.description,
+            "amount_net": doc.amount_net,
+            "amount_vat": doc.amount_vat,
+            "amount_gross": round(gross, 2),
+            "notes": doc.notes,
+            "items_list": [
+                {
+                    "name": doc.description or "Acquisto servizi esteri",
+                    "net_price": doc.amount_net,
+                    "vat": {"value": doc.vat_value},
+                }
+            ],
+            "payments_list": [
+                {
+                    "amount": round(gross, 2),
+                    "due_date": doc.date,
+                }
+            ],
+        }
+
+        # Nodo SDI e_invoice (ei_raw) per trasmissione telematica
+        fic_payload["e_invoice"] = {
+            "document_type": doc.self_invoice_type.value,
+            "original_supplier": {
+                "name": doc.supplier_name,
+                "vat_number": doc.supplier_vat_number,
+                "country_iso": doc.supplier_country_iso,
+            },
+        }
+        if doc.original_document_id is not None:
+            fic_payload["e_invoice"]["original_document_id"] = doc.original_document_id
+        if doc.original_document_description:
+            fic_payload["e_invoice"]["original_document_description"] = doc.original_document_description
+
+        payload = {"data": fic_payload}
+        response = await self._client.post(
+            f"/c/{self._company_id}/issued_documents",
+            json=payload,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return FICIssuedDocumentResponse(**data.get("data", {}))
+
+    @selective_retry
     async def create_expense(
         self,
         expense: FICCreateExpenseRequest,
         *,
         attachment_token: str | None = None,
+        paid: bool | None = None,
     ) -> FICExpenseResponse:
         """Crea un documento di spesa (o bozza autofattura) su FIC.
+
+        Se ``paid=True``, il documento viene marcato come saldato alla data
+        della fattura, associandolo al conto di pagamento configurato (vedi
+        FIC_AUTO_PAID, FIC_PAYMENT_ACCOUNT_NAME, FIC_PAYMENT_ACCOUNT_ID).
 
         Args:
             expense: Dati della spesa da registrare.
             attachment_token: Token ottenuto da get_attachment_token() per
                               allegare un PDF contestualmente alla creazione.
+            paid: Se True, marca la spesa come pagata. Se None, usa il valore
+                  di ``fic_auto_paid`` dalle settings.
 
         Returns:
             FICExpenseResponse con id e stato del documento creato.
@@ -230,12 +404,26 @@ class FICClient:
         # FIC v2 richiede payments_list per salvare importi non-zero
         gross = expense.amount_gross if expense.amount_gross is not None else expense.amount_net
         if gross > 0:
-            fic_payload["payments_list"] = [
-                {
-                    "amount": gross,
-                    "due_date": expense.due_date or expense.date or datetime.date.today().isoformat(),
-                }
-            ]
+            payment_entry: dict[str, Any] = {
+                "amount": gross,
+                "due_date": expense.due_date or expense.date or datetime.date.today().isoformat(),
+            }
+
+            # Auto-pagamento: marca come saldato se abilitato
+            do_paid = self._auto_paid if paid is None else paid
+            if do_paid:
+                payment_account_id = await self._resolve_payment_account()
+                if payment_account_id is not None:
+                    payment_entry["status"] = "paid"
+                    payment_entry["payment_date"] = expense.date or datetime.date.today().isoformat()
+                    payment_entry["payment_account_id"] = payment_account_id
+                else:
+                    logger.warning(
+                        "Auto-pagamento abilitato ma nessun conto disponibile: "
+                        "spesa registrata senza stato pagato"
+                    )
+
+            fic_payload["payments_list"] = [payment_entry]
 
         # items_list: detraibilità esplicita per Regime Forfettario
         # - tax_deductibility: 100  → costo deducibile al 100%

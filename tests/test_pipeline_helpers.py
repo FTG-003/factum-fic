@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from factum_fic.core.pipeline import is_temp_file, _archive_path
+from factum_fic.core.pipeline import is_temp_file
 
 
 def test_temp_file_crdownload() -> None:

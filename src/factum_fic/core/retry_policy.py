@@ -6,10 +6,8 @@ Errori 4xx (client) devono fallire immediatamente.
 
 from __future__ import annotations
 
-from typing import Any
-
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 _RETRIABLE_NETWORK = (
     httpx.TimeoutException,
@@ -28,9 +26,7 @@ def _is_retriable(exc: BaseException) -> bool:
         status = exc.response.status_code
         if status == 429:
             return True
-        if 500 <= status < 600:
-            return True
-        return False
+        return 500 <= status < 600
     return False
 
 

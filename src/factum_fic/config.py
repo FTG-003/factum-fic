@@ -41,6 +41,34 @@ class Settings(BaseSettings):
     # Watcher
     watch_dir: str = Field(default="~/Downloads", alias="WATCH_DIR")
 
+    # Auto-pagamento spesa su FIC
+    fic_auto_paid: bool = Field(
+        default=True,
+        alias="FIC_AUTO_PAID",
+    )
+    fic_payment_account_name: str | None = Field(
+        default=None,
+        alias="FIC_PAYMENT_ACCOUNT_NAME",
+    )
+    fic_payment_account_id: int | None = Field(
+        default=None,
+        alias="FIC_PAYMENT_ACCOUNT_ID",
+    )
+
+    # Generazione autofattura elettronica SDI (TD17/TD18/TD19)
+    fic_generate_self_invoice: bool = Field(
+        default=True,
+        alias="FIC_GENERATE_SELF_INVOICE",
+    )
+    fic_self_invoice_numeration: str = Field(
+        default="/TD17",
+        alias="FIC_SELF_INVOICE_NUMERATION",
+    )
+    fic_self_invoice_vat_value: int = Field(
+        default=22,
+        alias="FIC_SELF_INVOICE_VAT_VALUE",
+    )
+
     # Config file YAML (categorie, conti)
     config_file: Path | None = Field(default=None, alias="CONFIG_FILE")
 

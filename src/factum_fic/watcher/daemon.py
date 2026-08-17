@@ -7,12 +7,11 @@ e li invia automaticamente alla pipeline di elaborazione.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
-
-import re
 
 from factum_fic.config import Settings
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import httpx
-import pytest
 
 from factum_fic.core.retry_policy import _is_retriable
 

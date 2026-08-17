@@ -21,8 +21,8 @@ import json
 import logging
 import re
 import shutil
-from typing import Any
 from pathlib import Path
+from typing import Any
 
 from factum_fic.config import Settings
 from factum_fic.core.extractor import extract_text
@@ -31,6 +31,7 @@ from factum_fic.core.fic_client import FICClient
 from factum_fic.core.mapper import Mapper
 from factum_fic.core.models import (
     DocumentStatus,
+    FactumResponse,
     FileEvent,
     PipelineResult,
 )
@@ -108,9 +109,7 @@ def is_temp_file(path: Path) -> bool:
     name = path.name
     if name.startswith("."):
         return True
-    if _TEMP_FILE_RE.search(name):
-        return True
-    return False
+    return bool(_TEMP_FILE_RE.search(name))
 
 
 # ── Helper interni ────────────────────────────────────────────────────────────
@@ -124,7 +123,7 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _enrich_from_payload(factum_resp: "FactumResponse") -> None:
+def _enrich_from_payload(factum_resp: FactumResponse) -> None:
     """Arricchisce FactumParseResult da payload.content (envelope v2)."""
     result = factum_resp.result
     if result is None:
@@ -371,7 +370,6 @@ async def process_file(
             rate = await convert_currency(expense.currency, "EUR")
             if rate != 1.0:
                 original_net = expense.amount_net
-                original_gross = expense.amount_gross or expense.amount_net
                 expense.amount_net = round(expense.amount_net * rate, 2)
                 if expense.amount_gross is not None:
                     expense.amount_gross = round(expense.amount_gross * rate, 2)
@@ -446,11 +444,43 @@ async def process_file(
         # Crea spesa/autofattura su FIC (con allegato se token disponibile)
         fic_resp = await fic.create_expense(expense, attachment_token=attachment_token)
 
+        # ✅ Genera autofattura SDI (TD17/TD18/TD19) per spese estere
+        fic_self_invoice_id: int | None = None
+        if (
+            expense.is_autofattura
+            and settings.fic_generate_self_invoice
+            and fic_resp.id
+        ):
+            try:
+                # Determina il tipo SDI dal FactumParseResult originale
+                si_type = mapper.classify_self_invoice_type(result)
+                si_request = mapper.build_self_invoice_request(
+                    expense=expense,
+                    expense_id=fic_resp.id,
+                    numeration=settings.fic_self_invoice_numeration,
+                    vat_value=settings.fic_self_invoice_vat_value,
+                    supplier_name=supplier.name,
+                    supplier_vat_number=supplier.vat_number,
+                    supplier_country_iso=supplier.country_iso,
+                    self_invoice_type=si_type,
+                )
+                si_resp = await fic.create_issued_document(si_request)
+                fic_self_invoice_id = si_resp.id
+                logger.info(
+                    "✅ Autofattura SDI %s generata per spesa %d: id=%d",
+                    si_type.value, fic_resp.id, si_resp.id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "⚠️ Generazione autofattura SDI fallita (spesa %d): %s",
+                    fic_resp.id, exc,
+                )
+
         # ✅ Marca come completato SUBITO dopo la risposta FIC, PRIMA dello spostamento
-        queue.complete(sha, fic_resp.id)
+        queue.complete(sha, fic_resp.id, fic_self_invoice_id, path=str(path))
         logger.info(
-            "Registrato su FIC: id=%d, tipo=%s, coda aggiornata",
-            fic_resp.id, fic_resp.type,
+            "Registrato su FIC: spesa id=%d, autofattura SDI id=%s, coda aggiornata",
+            fic_resp.id, fic_self_invoice_id,
         )
 
         result = PipelineResult(
@@ -459,6 +489,7 @@ async def process_file(
             factum_status="done",
             fic_status="created",
             fic_id=fic_resp.id,
+            fic_self_invoice_id=fic_self_invoice_id,
             document_type=doc_type_detected,
         )
 

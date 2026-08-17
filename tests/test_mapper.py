@@ -2,8 +2,17 @@
 
 from __future__ import annotations
 
-from factum_fic.core.mapper import Mapper
-from factum_fic.core.models import DocumentType, FactumParseResult
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from factum_fic.core.mapper import Mapper, convert_currency
+from factum_fic.core.models import (
+    DocumentType,
+    FactumParseResult,
+    FICCreateExpenseRequest,
+    SelfInvoiceType,
+)
 
 
 def test_detect_self_invoice_estero(mapper: Mapper, sample_factum_result: dict) -> None:
@@ -146,14 +155,10 @@ def test_build_expense_amount_sanitization(mapper: Mapper) -> None:
 
 # ── Currency conversion tests ─────────────────────────────────────────────────
 
-import pytest
-from unittest.mock import patch, AsyncMock
-
 
 @pytest.mark.asyncio
 async def test_convert_currency_same() -> None:
     """Stessa valuta → tasso 1.0."""
-    from factum_fic.core.mapper import convert_currency
     rate = await convert_currency("EUR", "EUR")
     assert rate == 1.0
 
@@ -161,8 +166,6 @@ async def test_convert_currency_same() -> None:
 @pytest.mark.asyncio
 async def test_convert_currency_usd_to_eur() -> None:
     """USD → EUR: chiamata API Frankfurter con risposta mockata."""
-    from factum_fic.core.mapper import convert_currency
-
     mock_response = {"amount": 1.0, "base": "USD", "date": "2026-08-16", "rates": {"EUR": 0.92}}
 
     with patch("httpx.AsyncClient") as mock_client:
@@ -181,7 +184,7 @@ async def test_convert_currency_usd_to_eur() -> None:
 @pytest.mark.asyncio
 async def test_convert_currency_api_failure() -> None:
     """API Frankfurter non disponibile → fallback a 1.0 (log warning)."""
-    from factum_fic.core.mapper import _EXCHANGE_RATES_CACHE, convert_currency
+    from factum_fic.core.mapper import _EXCHANGE_RATES_CACHE
 
     # Pulisce la cache per evitare interferenze dal test precedente
     _EXCHANGE_RATES_CACHE.clear()
@@ -194,3 +197,193 @@ async def test_convert_currency_api_failure() -> None:
 
         rate = await convert_currency("USD", "EUR")
         assert rate == 1.0
+
+
+# ── Self-invoice SDI classification tests ────────────────────────────────────
+
+
+def test_classify_td17_extra_ue(mapper: Mapper) -> None:
+    """Fornitore Extra-UE (US) → TD17."""
+    result = FactumParseResult(
+        supplier_name="AWS Inc.",
+        supplier_vat="",
+        supplier_country="US",
+    )
+    assert mapper.classify_self_invoice_type(result) == SelfInvoiceType.TD17
+
+
+def test_classify_td17_extra_ue_switzerland(mapper: Mapper) -> None:
+    """Fornitore Svizzera (CH, non UE) → TD17."""
+    result = FactumParseResult(
+        supplier_name="Swiss Vendor AG",
+        supplier_vat="",
+        supplier_country="CH",
+    )
+    assert mapper.classify_self_invoice_type(result) == SelfInvoiceType.TD17
+
+
+def test_classify_td18_intra_ue_with_vat(mapper: Mapper) -> None:
+    """Fornitore Intra-UE con P.IVA (DE) → TD18."""
+    result = FactumParseResult(
+        supplier_name="German GmbH",
+        supplier_vat="DE123456789",
+        supplier_country="DE",
+    )
+    assert mapper.classify_self_invoice_type(result) == SelfInvoiceType.TD18
+
+
+def test_classify_td18_intra_ue_france_with_vat(mapper: Mapper) -> None:
+    """Fornitore Intra-UE con P.IVA (FR) → TD18."""
+    result = FactumParseResult(
+        supplier_name="French SAS",
+        supplier_vat="FR12345678901",
+        supplier_country="FR",
+    )
+    assert mapper.classify_self_invoice_type(result) == SelfInvoiceType.TD18
+
+
+def test_classify_td19_intra_ue_without_vat(mapper: Mapper) -> None:
+    """Fornitore Intra-UE senza P.IVA (ES) → TD19."""
+    result = FactumParseResult(
+        supplier_name="Spanish Vendor",
+        supplier_vat="",
+        supplier_country="ES",
+    )
+    assert mapper.classify_self_invoice_type(result) == SelfInvoiceType.TD19
+
+
+def test_classify_td19_intra_ue_netherlands_without_vat(mapper: Mapper) -> None:
+    """Fornitore Intra-UE senza P.IVA (NL) → TD19."""
+    result = FactumParseResult(
+        supplier_name="Dutch Vendor",
+        supplier_vat="",
+        supplier_country="NL",
+    )
+    assert mapper.classify_self_invoice_type(result) == SelfInvoiceType.TD19
+
+
+# ── Self-invoice request builder tests ───────────────────────────────────────
+
+
+def test_build_self_invoice_request_td17(mapper: Mapper, sample_factum_result: dict) -> None:
+    """build_self_invoice_request con TD17: IVA 22% calcolata correttamente."""
+    result = FactumParseResult(**sample_factum_result)
+    expense = mapper.build_expense(result)
+
+    si_request = mapper.build_self_invoice_request(
+        expense=expense,
+        expense_id=12345,
+        numeration="/TD",
+        vat_value=22,
+        supplier_name="DigitalOcean Inc.",
+        supplier_vat_number=None,
+        supplier_country_iso="US",
+        self_invoice_type=SelfInvoiceType.TD17,
+    )
+
+    assert si_request.self_invoice_type == SelfInvoiceType.TD17
+    assert si_request.vat_value == 22
+    assert si_request.amount_net == 23.40
+    assert si_request.amount_vat == 5.15  # 23.40 * 22 / 100 = 5.148 → round 5.15
+    assert si_request.amount_gross == 28.55  # 23.40 + 5.15
+    assert si_request.original_document_id == 12345
+    assert si_request.original_document_description == expense.description
+    assert si_request.supplier_name == "DigitalOcean Inc."
+    assert si_request.supplier_country_iso == "US"
+    assert si_request.numeration == "/TD"
+    assert "art. 17 c. 2 DPR 633/72" in si_request.notes
+    assert "[TD17]" in si_request.description
+
+
+def test_build_self_invoice_request_td18(mapper: Mapper) -> None:
+    """build_self_invoice_request con TD18: fornitore tedesco con P.IVA."""
+    expense = FICCreateExpenseRequest(
+        entity_id=42,
+        date="2026-09-15",
+        description="German GmbH — n. INV-DE-2026-091 — del 2026-09-15",
+        amount_net=1000.00,
+        amount_vat=0.0,
+        amount_gross=1000.00,
+        is_autofattura=True,
+    )
+
+    si_request = mapper.build_self_invoice_request(
+        expense=expense,
+        expense_id=12346,
+        numeration="/TD18",
+        vat_value=22,
+        supplier_name="German GmbH",
+        supplier_vat_number="DE123456789",
+        supplier_country_iso="DE",
+        self_invoice_type=SelfInvoiceType.TD18,
+    )
+
+    assert si_request.self_invoice_type == SelfInvoiceType.TD18
+    assert si_request.vat_value == 22
+    assert si_request.amount_net == 1000.00
+    assert si_request.amount_vat == 220.00  # 1000 * 0.22
+    assert si_request.amount_gross == 1220.00
+    assert si_request.supplier_vat_number == "DE123456789"
+    assert si_request.supplier_country_iso == "DE"
+    assert si_request.numeration == "/TD18"
+    assert "[TD18]" in si_request.description
+
+
+def test_build_self_invoice_request_td19(mapper: Mapper) -> None:
+    """build_self_invoice_request con TD19: fornitore spagnolo senza P.IVA."""
+    expense = FICCreateExpenseRequest(
+        entity_id=43,
+        date="2026-10-01",
+        description="Spanish Vendor — n. ES-2026-001 — del 2026-10-01",
+        amount_net=500.00,
+        amount_vat=0.0,
+        amount_gross=500.00,
+        is_autofattura=True,
+        notes="Nota di prova",
+    )
+
+    si_request = mapper.build_self_invoice_request(
+        expense=expense,
+        expense_id=12347,
+        numeration="/TD19",
+        vat_value=22,
+        supplier_name="Spanish Vendor",
+        supplier_vat_number=None,
+        supplier_country_iso="ES",
+        self_invoice_type=SelfInvoiceType.TD19,
+    )
+
+    assert si_request.self_invoice_type == SelfInvoiceType.TD19
+    assert si_request.amount_vat == 110.00  # 500 * 0.22
+    assert si_request.amount_gross == 610.00
+    assert si_request.supplier_vat_number is None
+    assert si_request.supplier_country_iso == "ES"
+    assert si_request.numeration == "/TD19"
+    assert "[TD19]" in si_request.description
+    assert "Nota di prova" in si_request.notes  # note originali preservate
+
+
+def test_build_self_invoice_request_zero_net(mapper: Mapper) -> None:
+    """Importo netto zero → IVA e lordo calcolati correttamente a zero."""
+    expense = FICCreateExpenseRequest(
+        entity_id=0,
+        date="2026-11-01",
+        description="Zero amount invoice",
+        amount_net=0.0,
+        amount_vat=0.0,
+        amount_gross=0.0,
+        is_autofattura=True,
+    )
+
+    si_request = mapper.build_self_invoice_request(
+        expense=expense,
+        expense_id=0,
+        numeration="/TD",
+        vat_value=22,
+        supplier_name="Test",
+        self_invoice_type=SelfInvoiceType.TD17,
+    )
+
+    assert si_request.amount_net == 0.0
+    assert si_request.amount_vat == 0.0
+    assert si_request.amount_gross == 0.0

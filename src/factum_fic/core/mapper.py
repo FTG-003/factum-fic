@@ -17,7 +17,9 @@ from factum_fic.core.models import (
     DocumentType,
     FactumParseResult,
     FICCreateExpenseRequest,
+    FICCreateIssuedDocumentRequest,
     FICCreateSupplierRequest,
+    SelfInvoiceType,
 )
 
 # Vendor noti e categorie associate (default)
@@ -44,6 +46,16 @@ _DEFAULT_ACCOUNTS: dict[str, str] = {
     "Pubblicità e marketing": "Spese di pubblicità",
     "Altri costi": "Costi vari",
 }
+
+# Paesi UE (ISO alpha-2) per classificazione SDI
+# Vedi: https://www.agenziaentrate.gov.it/portale/elenco-codici-iso
+_EU_COUNTRIES: frozenset[str] = frozenset({
+    "AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "ES", "FI",
+    "FR", "GR", "HR", "HU", "IE", "IT", "LT", "LU", "LV", "MT",
+    "NL", "PL", "PT", "RO", "SE", "SI", "SK",
+    # Codici estesi usati da SDI
+    "EL", "GB",
+})
 
 
 def _to_iso_date(raw_date: str) -> str | None:
@@ -158,6 +170,39 @@ class Mapper:
 
         return DocumentType.EXPENSE
 
+    # ── Classificazione SDI (TD17 / TD18 / TD19) ─────────────────────
+
+    def classify_self_invoice_type(
+        self,
+        result: FactumParseResult,
+    ) -> SelfInvoiceType:
+        """Classifica il tipo di autofattura SDI in base alla nazionalità del fornitore.
+
+        Regole:
+        - Extra-UE (paese non presente in _EU_COUNTRIES) → TD17
+        - Intra-UE con partita IVA → TD18
+        - Intra-UE senza partita IVA → TD19
+
+        Args:
+            result: Risultato del parsing Factum.
+
+        Returns:
+            SelfInvoiceType.TD17, .TD18 o .TD19.
+        """
+        country = (result.supplier_country or "").strip().upper()
+        vat = (result.supplier_vat or "").strip()
+
+        # Extra-UE → TD17
+        if country not in _EU_COUNTRIES:
+            return SelfInvoiceType.TD17
+
+        # Intra-UE con P.IVA → TD18
+        if vat:
+            return SelfInvoiceType.TD18
+
+        # Intra-UE senza P.IVA → TD19
+        return SelfInvoiceType.TD19
+
     # ── Categorizzazione ──────────────────────────────────────────────────
 
     def categorize(self, result: FactumParseResult) -> str:
@@ -247,10 +292,7 @@ class Mapper:
         if raw_date:
             # Verifica formato ISO YYYY-MM-DD o converti da DD/MM/YYYY, DD.MM.YYYY
             iso_date = _to_iso_date(raw_date)
-            if iso_date:
-                issue_date = iso_date
-            else:
-                issue_date = datetime.date.today().isoformat()
+            issue_date = iso_date or datetime.date.today().isoformat()
         else:
             issue_date = datetime.date.today().isoformat()
 
@@ -289,4 +331,76 @@ class Mapper:
             has_iva=currency == "EUR",
             is_autofattura=doc_type == DocumentType.SELF_INVOICE,
             notes=notes,
+        )
+
+    # ── Costruzione request autofattura SDI (TD17/TD18/TD19) ─────────────
+
+    def build_self_invoice_request(
+        self,
+        expense: FICCreateExpenseRequest,
+        expense_id: int,
+        *,
+        numeration: str = "/TD",
+        vat_value: int = 22,
+        supplier_name: str = "",
+        supplier_vat_number: str | None = None,
+        supplier_country_iso: str = "XX",
+        self_invoice_type: SelfInvoiceType = SelfInvoiceType.TD17,
+    ) -> FICCreateIssuedDocumentRequest:
+        """Costruisce la request per creare un'autofattura SDI su FIC.
+
+        Partendo dalla spesa estera già registrata (``expense``), calcola
+        l'IVA al ``vat_value``% sull'imponibile e costruisce il payload
+        per ``issued_documents`` di tipo ``self_supplier_invoice`` con
+        i nodi SDI ``e_invoice`` (ei_raw) per la trasmissione telematica.
+
+        La classificazione (TD17/18/19) viene passata esternamente in
+        ``self_invoice_type``; il mapper espone ``classify_self_invoice_type()``
+        per ottenerla dal ``FactumParseResult`` originale.
+
+        Args:
+            expense: La spesa estera già creata su FIC.
+            expense_id: ID della spesa originale su FIC (per riferimento).
+            numeration: Numerazione da usare (default "/TD").
+            vat_value: Aliquota IVA percentuale (default 22).
+            supplier_name: Nome fornitore estero per SDI.
+            supplier_vat_number: P.IVA fornitore estero (se presente).
+            supplier_country_iso: Codice ISO del paese fornitore.
+            self_invoice_type: Tipologia SDI (TD17/TD18/TD19).
+
+        Returns:
+            FICCreateIssuedDocumentRequest pronto per ``create_issued_document()``.
+        """
+        net = expense.amount_net
+        vat = round(net * vat_value / 100, 2)
+        gross = round(net + vat, 2)
+
+        notes = (
+            f"Autofattura ai sensi dell'art. 17 c. 2 DPR 633/72 per acquisto "
+            f"da fornitore estero - rif. spesa FIC n. {expense_id}. "
+            f"Documento elaborato via Factum Parse API (Zero Data Retention)."
+        )
+        if expense.notes:
+            notes += f"\nNote originali: {expense.notes}"
+
+        description = expense.description
+        if description and self_invoice_type.value not in description:
+            description = f"[{self_invoice_type.value}] {description}"
+
+        return FICCreateIssuedDocumentRequest(
+            entity_id=expense.entity_id if expense.entity_id is not None else 0,
+            date=expense.date,
+            numeration=numeration,
+            description=description,
+            amount_net=net,
+            amount_vat=vat,
+            amount_gross=gross,
+            vat_value=vat_value,
+            self_invoice_type=self_invoice_type,
+            notes=notes,
+            original_document_id=expense_id,
+            original_document_description=expense.description,
+            supplier_name=supplier_name,
+            supplier_vat_number=supplier_vat_number,
+            supplier_country_iso=supplier_country_iso,
         )

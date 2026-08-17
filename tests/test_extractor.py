@@ -8,7 +8,6 @@ import pytest
 
 from factum_fic.core.extractor import extract_text
 
-
 # ── Fixture: file di test temporanei ──────────────────────────────────────────
 
 

@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import Any
 
 import typer
 
 from factum_fic import __version__
-from factum_fic.cli.ui import console, print_error, print_info, print_result_table, print_warning
+from factum_fic.cli.ui import console, print_error, print_info, print_ok, print_result_table
 from factum_fic.config import load_settings, load_yaml_config
 from factum_fic.core.pipeline import ensure_dirs
 
@@ -44,7 +45,7 @@ def process(
     config_file: str = typer.Option("", "--config", "-c", help="Percorso YAML categorie"),
 ) -> None:
     """Processa un singolo file fattura e lo registra su FIC."""
-    from factum_fic.cli.verify import verify_and_bind, ForfettarioCheckError
+    from factum_fic.cli.verify import ForfettarioCheckError, verify_and_bind
     from factum_fic.core.factum_client import FactumClient
     from factum_fic.core.fic_client import FICClient
     from factum_fic.core.mapper import Mapper
@@ -67,7 +68,7 @@ def process(
                 await verify_and_bind(fic, factum)
             except ForfettarioCheckError as e:
                 print_error(str(e))
-                raise typer.Exit(code=1)
+                raise typer.Exit(code=1) from None
 
             result = await process_file(
                 Path(path),
@@ -96,7 +97,7 @@ def process_inbox(
     from factum_fic.core.fic_client import FICClient
     from factum_fic.core.mapper import Mapper
     from factum_fic.core.models import PipelineResult
-    from factum_fic.core.pipeline import process_file, is_temp_file
+    from factum_fic.core.pipeline import is_temp_file, process_file
     from factum_fic.storage.queue import QueueStore
 
     settings = load_settings()
@@ -128,12 +129,12 @@ def process_inbox(
         results: list[PipelineResult] = []
 
         # Verifica regime fiscale una tantum per tutti i file
-        from factum_fic.cli.verify import verify_and_bind, ForfettarioCheckError
+        from factum_fic.cli.verify import ForfettarioCheckError, verify_and_bind
         try:
             await verify_and_bind(fic, factum)
         except ForfettarioCheckError as e:
             print_error(str(e))
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=1) from None
 
         try:
             for path in files:
@@ -170,7 +171,7 @@ def watch(
     config_file: str = typer.Option("", "--config", "-c", help="Percorso YAML categorie"),
 ) -> None:
     """Avvia il watcher su una directory per elaborazione automatica."""
-    from factum_fic.cli.verify import verify_and_bind, ForfettarioCheckError
+    from factum_fic.cli.verify import ForfettarioCheckError, verify_and_bind
     from factum_fic.core.factum_client import FactumClient
     from factum_fic.core.fic_client import FICClient
     from factum_fic.core.mapper import Mapper
@@ -212,7 +213,7 @@ def watch(
         asyncio.run(verify_and_bind(fic, factum))
     except ForfettarioCheckError as e:
         print_error(str(e))
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
     daemon = WatcherDaemon(settings, lambda p: asyncio.run(_on_file(p)))
 
@@ -264,9 +265,9 @@ def queue(
 @app.command()
 def check() -> None:
     """Verifica connettività con Factum e FIC e regime fiscale."""
+    from factum_fic.cli.verify import ForfettarioCheckError, verify_and_bind
     from factum_fic.core.factum_client import FactumClient
     from factum_fic.core.fic_client import FICClient
-    from factum_fic.cli.verify import verify_and_bind, ForfettarioCheckError
 
     settings = load_settings()
 
@@ -286,7 +287,7 @@ def check() -> None:
                     console.print(f"  Regime fiscale:   {info['tax_regime']} ✅")
                 except ForfettarioCheckError as e:
                     print_error(str(e))
-                    raise typer.Exit(code=1)
+                    raise typer.Exit(code=1) from None
         finally:
             await factum.close()
             await fic.close()
@@ -298,9 +299,9 @@ def check() -> None:
 @app.command()
 def verify() -> None:
     """Verifica il regime fiscale dell'azienda su Fatture in Cloud."""
+    from factum_fic.cli.verify import ForfettarioCheckError, verify_and_bind
     from factum_fic.core.factum_client import FactumClient
     from factum_fic.core.fic_client import FICClient
-    from factum_fic.cli.verify import verify_and_bind, ForfettarioCheckError
 
     settings = load_settings()
 
@@ -311,12 +312,222 @@ def verify() -> None:
             info = await verify_and_bind(fic, factum)
             print_ok(f"Regime fiscale verificato: {info['tax_regime']}")
             print_ok(f"Azienda: {info['name']} (P.IVA {info['vat_number']})")
-            print_ok(f"Binding Factum completato: header X-FIC-VAT trasmesso")
+            print_ok("Binding Factum completato: header X-FIC-VAT trasmesso")
         except ForfettarioCheckError as e:
             print_error(str(e))
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=1) from None
         finally:
             await factum.close()
             await fic.close()
 
     asyncio.run(_verify())
+
+
+# ── Dashboard di stato ───────────────────────────────────────────────────────
+
+
+def _tax_regime_label(regime: str) -> str:
+    """Traduce il codice regime FIC in etichetta leggibile."""
+    regime_l = (regime or "").strip().lower()
+    labels = {
+        "forfettario": "Regime Forfettario",
+        "rf19": "Regime Forfettario (RF19)",
+        "ordinario": "Regime Ordinario",
+    }
+    return labels.get(regime_l, regime or "—")
+
+
+async def collect_status(factum: Any, fic: Any, queue: Any) -> dict:
+    """Raccoglie i dati operativi per il dashboard ``factum-fic status``.
+
+    Separata dal rendering per essere testabile con client mockati.
+
+    Returns:
+        Dizionario con sezioni: factum, fic, company, payment_account,
+        self_invoice, queue.
+    """
+    # Factum Parse API
+    try:
+        factum_ok = await factum.health()
+    except Exception:
+        factum_ok = False
+
+    # FIC: salute + info azienda
+    try:
+        fic_ok = await fic.health()
+    except Exception:
+        fic_ok = False
+
+    company: dict[str, Any] = {}
+    if fic_ok:
+        try:
+            company = await fic.get_company_info()
+        except Exception:
+            company = {}
+
+    # Conto di pagamento attivo per auto-pagamento
+    payment_account: dict[str, Any] | None = None
+    if fic_ok:
+        try:
+            payment_account = await fic.resolve_payment_account()
+        except Exception:
+            payment_account = None
+
+    # Statistiche coda locale
+    try:
+        queue_summary = queue.summary()
+    except Exception:
+        queue_summary = {}
+
+    from factum_fic.config import load_settings
+
+    settings = load_settings()
+
+    return {
+        "factum": {"ok": factum_ok, "url": getattr(factum, "_api_url", "")},
+        "fic": {"ok": fic_ok, "url": getattr(fic, "_base_url", "")},
+        "company": company,
+        "payment_account": payment_account,
+        "self_invoice": {
+            "enabled": settings.fic_generate_self_invoice,
+            "numeration": settings.fic_self_invoice_numeration,
+            "vat_value": settings.fic_self_invoice_vat_value,
+        },
+        "queue": queue_summary,
+    }
+
+
+def render_status(data: dict) -> None:
+    """Rende il dashboard di stato con Rich."""
+    from rich.panel import Panel
+    from rich.table import Table
+
+    factum_ok = data["factum"]["ok"]
+    fic_ok = data["fic"]["ok"]
+    company = data["company"]
+    payment_account = data["payment_account"]
+    si = data["self_invoice"]
+    queue_summary = data["queue"]
+
+    # ── Tabella connessioni ────────────────────────────────────────────
+    conn_table = Table(box=None, show_header=False, pad_edge=False)
+    conn_table.add_column(style="bold", width=24)
+    conn_table.add_column()
+    conn_table.add_row(
+        "Factum Parse API",
+        f"{'✅ OK' if factum_ok else '❌ NON RAGGIUNGIBILE'}  {data['factum']['url']}",
+    )
+    conn_table.add_row(
+        "Fatture in Cloud",
+        f"{'✅ OK' if fic_ok else '❌ NON RAGGIUNGIBILE'}  {data['fic']['url']}",
+    )
+
+    # ── Tabella azienda ────────────────────────────────────────────────
+    company_table = Table(box=None, show_header=False, pad_edge=False)
+    company_table.add_column(style="bold", width=24)
+    company_table.add_column()
+    if fic_ok and company:
+        company_table.add_row("Ragione Sociale", company.get("name") or "—")
+        company_table.add_row(
+            "Partita IVA",
+            company.get("vat_number") or "—",
+        )
+        company_table.add_row(
+            "Codice Fiscale",
+            company.get("fiscal_code") or "—",
+        )
+        regime = _tax_regime_label(company.get("tax_regime") or "")
+        is_forfettario = (
+            (company.get("tax_regime") or "").strip().lower() in {"forfettario", "rf19"}
+        )
+        company_table.add_row(
+            "Regime Fiscale",
+            f"{regime} {'✅' if is_forfettario else '⚠️ non forfettario'}",
+        )
+    else:
+        company_table.add_row("Azienda", "Non raggiungibile (verifica credenziali FIC)")
+
+    # ── Tabella conto di pagamento ─────────────────────────────────────
+    pay_table = Table(box=None, show_header=False, pad_edge=False)
+    pay_table.add_column(style="bold", width=24)
+    pay_table.add_column()
+    if payment_account:
+        pay_table.add_row("Conto attivo", f"{payment_account.get('name')} (id={payment_account.get('id')})")
+        pay_table.add_row("Auto-pagamento", "✅ abilitato — spese marcate come saldate")
+    else:
+        pay_table.add_row("Conto attivo", "Nessun conto disponibile")
+        pay_table.add_row("Auto-pagamento", "⚠️ nessun conto configurato")
+
+    # ── Tabella autofatture SDI ────────────────────────────────────────
+    si_table = Table(box=None, show_header=False, pad_edge=False)
+    si_table.add_column(style="bold", width=24)
+    si_table.add_column()
+    si_table.add_row(
+        "Generazione SDI",
+        f"{'✅ attiva' if si['enabled'] else '❌ disattivata'}",
+    )
+    si_table.add_row("Sezionale numerazione", si["numeration"])
+    si_table.add_row(
+        "Aliquota IVA (debito F24)",
+        f"{si['vat_value']}% — art. 17 c. 2 DPR 633/72",
+    )
+
+    # ── Tabella coda locale ────────────────────────────────────────────
+    q_table = Table(box=None, show_header=False, pad_edge=False)
+    q_table.add_column(style="bold", width=24)
+    q_table.add_column()
+    q_table.add_row("Fatture elaborate", str(queue_summary.get("processed", 0)))
+    q_table.add_row("Spese registrate (FIC)", str(queue_summary.get("expenses", 0)))
+    q_table.add_row("Autofatture SDI generate", str(queue_summary.get("self_invoices", 0)))
+    q_table.add_row("Errori in coda", str(queue_summary.get("errors", 0)))
+    q_table.add_row("In attesa", str(queue_summary.get("queued", 0)))
+
+    # ── Assemblaggio ───────────────────────────────────────────────────
+    from rich.console import Group
+
+    content = Group(
+        "[bold cyan]Connessioni[/]",
+        conn_table,
+        "",
+        "[bold cyan]Azienda FIC[/]",
+        company_table,
+        "",
+        "[bold cyan]Conto di pagamento (auto-pagamento spese)[/]",
+        pay_table,
+        "",
+        "[bold cyan]Autofatture SDI (TD17/TD18/TD19)[/]",
+        si_table,
+        "",
+        "[bold cyan]Coda locale SQLite[/]",
+        q_table,
+    )
+    panel = Panel(
+        content,
+        title="📊 factum-fic status",
+        border_style="cyan",
+    )
+    console.print(panel)
+
+
+@app.command()
+def status() -> None:
+    """Mostra il dashboard operativo: salute API, azienda, conto, autofatture, coda."""
+    from factum_fic.core.factum_client import FactumClient
+    from factum_fic.core.fic_client import FICClient
+    from factum_fic.storage.queue import QueueStore
+
+    settings = load_settings()
+    factum = FactumClient(settings)
+    fic = FICClient(settings)
+    queue = QueueStore()
+
+    async def _run() -> None:
+        try:
+            data = await collect_status(factum, fic, queue)
+            render_status(data)
+        finally:
+            await factum.close()
+            await fic.close()
+            queue.close()
+
+    asyncio.run(_run())

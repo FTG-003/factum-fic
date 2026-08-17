@@ -8,7 +8,6 @@ Prima di qualsiasi elaborazione, verifica che:
 
 from __future__ import annotations
 
-from factum_fic.config import Settings
 from factum_fic.core.factum_client import FactumClient
 from factum_fic.core.fic_client import FICClient
 

@@ -232,7 +232,6 @@ def _mock_fic_transport() -> httpx.MockTransport:
             and request.url.path.endswith("/attachment")
             and request.method == "POST"
         ):
-            # Estrai document_id dal path
             return httpx.Response(
                 201,
                 json={
@@ -240,6 +239,21 @@ def _mock_fic_transport() -> httpx.MockTransport:
                         "id": 999,
                         "filename": "allegato.pdf",
                         "url": "https://mock.fic.test/attachment/999",
+                    },
+                },
+            )
+
+        # Create issued document (self-invoice SDI)
+        if request.url.path.endswith("/issued_documents") and request.method == "POST":
+            body = json.loads(request.content)
+            data = body.get("data", {})
+            return httpx.Response(
+                201,
+                json={
+                    "data": {
+                        "id": 67890,
+                        "type": data.get("type", "self_supplier_invoice"),
+                        "status": "draft",
                     },
                 },
             )
@@ -502,3 +516,98 @@ async def test_pipeline_with_attachment(
     assert result.status == DocumentStatus.RECORDED
     assert result.fic_id == 12345
     assert result.factum_status == "done"
+
+
+# ── Test generazione autofattura SDI (TD17/TD18/TD19) ────────────────────────
+
+
+async def test_pipeline_self_invoice_generated_for_foreign_supplier(
+    mock_factum: FactumClient,
+    mock_fic: FICClient,
+    mapper: Mapper,
+    queue: QueueStore,
+    mock_settings: Settings,
+    tmp_path: Path,
+) -> None:
+    """Fornitore estero (DigitalOcean US) → expense creato + autofattura SDI generata.
+
+    Verifica che:
+    1. La spesa estera sia creata con is_autofattura=True
+    2. L'autofattura SDI (issued_document) sia creata dopo la spesa
+    3. Il log contenga i riferimenti all'autofattura generata
+    """
+    import logging
+
+    # Cattura i log per verificare la generazione autofattura
+    logger = logging.getLogger("factum_fic.core.pipeline")
+    logger.setLevel(logging.INFO)
+
+    from io import StringIO
+
+    log_capture = StringIO()
+    handler = logging.StreamHandler(log_capture)
+    handler.setLevel(logging.INFO)
+    logger.addHandler(handler)
+
+    try:
+        src = _FIXTURES / "sample_saas_invoice.txt"
+        path = tmp_path / "test_self_invoice_invoice.txt"
+        shutil.copy2(src, path)
+
+        result = await process_file(
+            path,
+            factum=mock_factum,
+            fic=mock_fic,
+            mapper=mapper,
+            queue=queue,
+            settings=mock_settings,
+        )
+
+        # Verifica spesa creato
+        assert result.status == DocumentStatus.RECORDED
+        assert result.fic_id == 12345
+        assert result.document_type == DocumentType.SELF_INVOICE
+
+        # Verifica che l'autofattura SDI sia stata generata
+        log_output = log_capture.getvalue()
+        assert "✅ Autofattura SDI TD17 generata per spesa 12345: id=67890" in log_output
+    finally:
+        logger.removeHandler(handler)
+
+
+async def test_create_issued_document_direct(
+    mock_fic: FICClient,
+) -> None:
+    """Test diretto di create_issued_document su FICClient.
+
+    Verifica che il payload inviato a FIC v2 /issued_documents contenga
+    i nodi SDI e_invoice (ei_raw) e i dati fiscali corretti.
+    """
+    from factum_fic.core.models import (
+        FICCreateIssuedDocumentRequest,
+        SelfInvoiceType,
+    )
+
+    request = FICCreateIssuedDocumentRequest(
+        entity_id=42,
+        date="2026-09-01",
+        numeration="/TD17",
+        description="[TD17] DigitalOcean Inc. — n. INV-2026-08101 — del 2026-08-01",
+        amount_net=59.00,
+        amount_vat=12.98,
+        amount_gross=71.98,
+        vat_value=22,
+        self_invoice_type=SelfInvoiceType.TD17,
+        notes="Autofattura ai sensi dell'art. 17 c. 2 DPR 633/72",
+        original_document_id=12345,
+        original_document_description="DigitalOcean Inc. — n. INV-2026-08101 — del 2026-08-01",
+        supplier_name="DigitalOcean Inc.",
+        supplier_vat_number=None,
+        supplier_country_iso="US",
+    )
+
+    response = await mock_fic.create_issued_document(request)
+
+    assert response.id == 67890
+    assert response.type == "self_supplier_invoice"
+    assert response.status == "draft"

@@ -5,14 +5,16 @@ Usa httpx MockTransport per simulare FIC API e Factum API.
 
 from __future__ import annotations
 
-import pytest
-import httpx
+import json
 
-from factum_fic.cli.verify import verify_and_bind, ForfettarioCheckError
+import httpx
+import pytest
+
+from factum_fic.cli.verify import ForfettarioCheckError, verify_and_bind
 from factum_fic.config import Settings
 from factum_fic.core.factum_client import FactumClient
 from factum_fic.core.fic_client import FICClient
-
+from factum_fic.core.models import FICCreateExpenseRequest
 
 # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -129,7 +131,6 @@ class TestVerifyAndBind:
             assert info["tax_regime"] == "forfettario"
             assert info["vat_number"] == "IT01234567890"
             assert info["fiscal_code"] == "TSTSRM00A01H501A"
-            # Verifica che FactumClient abbia ricevuto la P.IVA
             assert factum._client.headers.get("X-FIC-VAT") == "IT01234567890"
             assert factum._client.headers.get("X-FIC-Company-ID") == "12345"
         finally:
@@ -197,7 +198,6 @@ class TestVerifyAndBind:
         fic._client = _make_fic_client(transport=_mock_fic_company(company))
 
         try:
-            # Se factum è None, non deve crashare
             info = await verify_and_bind(fic, factum=None)
             assert info["tax_regime"] == "forfettario"
             assert info["vat_number"] == ""
@@ -339,7 +339,6 @@ class TestUpdateFicVat:
         factum._client = _make_factum_client(transport=_mock_factum_transport())
 
         try:
-            # Il company ID è impostato in __init__ da settings
             assert factum._client.headers.get("X-FIC-Company-ID") == "12345"
         finally:
             await factum.close()
@@ -396,3 +395,280 @@ class TestUpdateFicVat:
             assert received_headers[0].get("x-fic-vat") == "IT01234567890"
         finally:
             await factum.close()
+
+
+# ── Test per FICClient.get_payment_accounts e auto-pagamento ────────────
+
+
+class TestAutoPaid:
+    """Testa get_payment_accounts e l'auto-pagamento in create_expense."""
+
+    @pytest.mark.asyncio
+    async def test_get_payment_accounts_success(self) -> None:
+        """get_payment_accounts restituisce la lista dei conti."""
+        accounts_data = [
+            {"id": 1, "name": "Carta di Credito", "type": "standard"},
+            {"id": 2, "name": "Conto Corrente", "type": "bank"},
+        ]
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"data": accounts_data})
+
+        settings = _make_settings()
+        fic = FICClient(settings)
+        fic._client = _make_fic_client(transport=httpx.MockTransport(_handler))
+
+        try:
+            accounts = await fic.get_payment_accounts()
+            assert len(accounts) == 2
+            assert accounts[0]["name"] == "Carta di Credito"
+            assert accounts[1]["id"] == 2
+        finally:
+            await fic.close()
+
+    @pytest.mark.asyncio
+    async def test_get_payment_accounts_empty(self) -> None:
+        """Lista vuota non causa errore."""
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"data": []})
+
+        settings = _make_settings()
+        fic = FICClient(settings)
+        fic._client = _make_fic_client(transport=httpx.MockTransport(_handler))
+
+        try:
+            accounts = await fic.get_payment_accounts()
+            assert accounts == []
+        finally:
+            await fic.close()
+
+    @pytest.mark.asyncio
+    async def test_create_expense_auto_paid_by_default(self) -> None:
+        """Con FIC_AUTO_PAID=true (default), create_expense marca la spesa come pagata."""
+        sent_payloads: list[dict] = []
+
+        def _combined_handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/info/payment_accounts"):
+                return httpx.Response(200, json={"data": [{"id": 42, "name": "Carta di Credito"}]})
+            sent_payloads.append(json.loads(request.content) if request.content else {})
+            return httpx.Response(200, json={"data": {"id": 999, "type": "expense", "status": "paid"}})
+
+        settings = _make_settings()
+        fic = FICClient(settings)
+        fic._client = _make_fic_client(transport=httpx.MockTransport(_combined_handler))
+
+        try:
+            expense = FICCreateExpenseRequest(
+                date="2026-01-15",
+                description="Test SaaS",
+                amount_net=100.0,
+                amount_vat=0.0,
+                amount_gross=100.0,
+                category="Servizi",
+            )
+            resp = await fic.create_expense(expense)
+            assert resp.id == 999
+            assert resp.status == "paid"
+
+            assert len(sent_payloads) == 1
+            data = sent_payloads[0].get("data", {})
+            payments = data.get("payments_list", [])
+            assert len(payments) == 1
+            payment = payments[0]
+            assert payment["status"] == "paid"
+            assert payment["payment_date"] == "2026-01-15"
+            assert payment["payment_account_id"] == 42
+            assert payment["amount"] == 100.0
+        finally:
+            await fic.close()
+
+    @pytest.mark.asyncio
+    async def test_create_expense_paid_explicit_false(self) -> None:
+        """paid=False disabilita l'auto-pagamento anche con settings abilitato."""
+        sent_payloads: list[dict] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            sent_payloads.append(json.loads(request.content) if request.content else {})
+            return httpx.Response(200, json={"data": {"id": 1, "type": "expense", "status": "draft"}})
+
+        settings = _make_settings()  # ha FIC_AUTO_PAID=true di default
+        fic = FICClient(settings)
+        fic._client = _make_fic_client(transport=httpx.MockTransport(_handler))
+
+        try:
+            expense = FICCreateExpenseRequest(
+                date="2026-02-01",
+                description="Test SaaS no paid",
+                amount_net=50.0,
+                amount_vat=0.0,
+                amount_gross=50.0,
+            )
+            resp = await fic.create_expense(expense, paid=False)
+            assert resp.id == 1
+
+            assert len(sent_payloads) == 1
+            payments = sent_payloads[0].get("data", {}).get("payments_list", [])
+            assert len(payments) == 1
+            assert "status" not in payments[0]
+            assert "payment_date" not in payments[0]
+            assert "payment_account_id" not in payments[0]
+        finally:
+            await fic.close()
+
+    @pytest.mark.asyncio
+    async def test_create_expense_no_payment_account_fallback(self) -> None:
+        """Se nessun conto è disponibile, la spesa viene creata senza status paid."""
+        sent_payloads: list[dict] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/info/payment_accounts"):
+                return httpx.Response(200, json={"data": []})
+            sent_payloads.append(json.loads(request.content) if request.content else {})
+            return httpx.Response(200, json={"data": {"id": 2, "type": "expense", "status": "draft"}})
+
+        settings = _make_settings()
+        fic = FICClient(settings)
+        fic._client = _make_fic_client(transport=httpx.MockTransport(_handler))
+
+        try:
+            expense = FICCreateExpenseRequest(
+                date="2026-03-10",
+                description="Fallback test",
+                amount_net=75.0,
+                amount_vat=0.0,
+                amount_gross=75.0,
+            )
+            resp = await fic.create_expense(expense)
+            assert resp.id == 2
+
+            assert len(sent_payloads) == 1
+            payments = sent_payloads[0].get("data", {}).get("payments_list", [])
+            assert len(payments) == 1
+            assert "status" not in payments[0]
+            assert "payment_date" not in payments[0]
+        finally:
+            await fic.close()
+
+    @pytest.mark.asyncio
+    async def test_create_expense_lookup_by_account_name(self) -> None:
+        """Se FIC_PAYMENT_ACCOUNT_NAME è impostato, cerca il conto corrispondente."""
+        sent_payloads: list[dict] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/info/payment_accounts"):
+                return httpx.Response(200, json={
+                    "data": [
+                        {"id": 10, "name": "Bonifico"},
+                        {"id": 20, "name": "Revolut"},
+                        {"id": 30, "name": "Carta di Credito"},
+                    ]
+                })
+            sent_payloads.append(json.loads(request.content) if request.content else {})
+            return httpx.Response(200, json={"data": {"id": 3, "type": "expense", "status": "paid"}})
+
+        settings = _make_settings()
+        fic = FICClient(settings)
+        fic._payment_account_name = "Revolut"
+        fic._client = _make_fic_client(transport=httpx.MockTransport(_handler))
+
+        try:
+            expense = FICCreateExpenseRequest(
+                date="2026-04-05",
+                description="Match by name",
+                amount_net=200.0,
+                amount_vat=0.0,
+                amount_gross=200.0,
+            )
+            resp = await fic.create_expense(expense)
+            assert resp.id == 3
+
+            assert len(sent_payloads) == 1
+            payments = sent_payloads[0].get("data", {}).get("payments_list", [])
+            assert len(payments) == 1
+            assert payments[0]["payment_account_id"] == 20
+        finally:
+            await fic.close()
+
+    @pytest.mark.asyncio
+    async def test_create_expense_explicit_account_id(self) -> None:
+        """FIC_PAYMENT_ACCOUNT_ID ha priorità sulla risoluzione via nome."""
+        sent_payloads: list[dict] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            sent_payloads.append(json.loads(request.content) if request.content else {})
+            return httpx.Response(200, json={"data": {"id": 4, "type": "expense", "status": "paid"}})
+
+        settings = _make_settings()
+        fic = FICClient(settings)
+        fic._payment_account_id = 99  # override esplicito
+        fic._client = _make_fic_client(transport=httpx.MockTransport(_handler))
+
+        try:
+            expense = FICCreateExpenseRequest(
+                date="2026-05-01",
+                description="Explicit account ID",
+                amount_net=150.0,
+                amount_vat=0.0,
+                amount_gross=150.0,
+            )
+            resp = await fic.create_expense(expense)
+            assert resp.id == 4
+
+            assert len(sent_payloads) == 1
+            payments = sent_payloads[0].get("data", {}).get("payments_list", [])
+            assert len(payments) == 1
+            assert payments[0]["payment_account_id"] == 99
+        finally:
+            await fic.close()
+
+    @pytest.mark.asyncio
+    async def test_get_payment_accounts_error_propagates(self) -> None:
+        """Un errore HTTP da get_payment_accounts viene propagato."""
+
+        def _fail_handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, json={"error": "Server Error"})
+
+        settings = _make_settings()
+        fic = FICClient(settings)
+        fic._client = _make_fic_client(transport=httpx.MockTransport(_fail_handler))
+
+        try:
+            with pytest.raises(httpx.HTTPStatusError):
+                await fic.get_payment_accounts()
+        finally:
+            await fic.close()
+
+    @pytest.mark.asyncio
+    async def test_resolve_payment_account_cached(self) -> None:
+        """La risoluzione del conto è cache: chiamate successive non interrogano API."""
+        call_count = 0
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            if request.url.path.endswith("/info/payment_accounts"):
+                call_count += 1
+                return httpx.Response(200, json={"data": [{"id": 7, "name": "Unico"}]})
+            return httpx.Response(200, json={"data": {"id": 5, "type": "expense", "status": "paid"}})
+
+        settings = _make_settings()
+        fic = FICClient(settings)
+        fic._client = _make_fic_client(transport=httpx.MockTransport(_handler))
+
+        try:
+            expense = FICCreateExpenseRequest(
+                date="2026-06-01",
+                description="Cache test",
+                amount_net=10.0,
+                amount_vat=0.0,
+                amount_gross=10.0,
+            )
+            # Prima chiamata -> interroga API
+            await fic.create_expense(expense)
+            assert call_count == 1
+
+            # Seconda chiamata -> usa cache
+            await fic.create_expense(expense)
+            assert call_count == 1  # non incrementato
+        finally:
+            await fic.close()

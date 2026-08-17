@@ -10,6 +10,7 @@ import pytest
 from factum_fic.config import Settings
 from factum_fic.watcher.daemon import WatcherDaemon
 
+
 @pytest.fixture
 def watch_dir(tmp_path: Path) -> Path:
     """Directory temporanea per il watcher."""
