@@ -1,4 +1,8 @@
-"""Entrypoint CLI Typer per factum-fic."""
+"""Entrypoint CLI Typer per factum-fic con alias italiani.
+
+Tutti i comandi hanno un alias italiano per utenti non tecnici.
+Gli alias sono risolti automaticamente via ``_AliasedGroup``.
+"""
 
 from __future__ import annotations
 
@@ -8,16 +12,47 @@ from pathlib import Path
 from typing import Any
 
 import typer
+from typer.core import TyperGroup
 
 from factum_fic import __version__
 from factum_fic.cli.ui import console, print_error, print_info, print_ok, print_result_table
 from factum_fic.config import load_settings, load_yaml_config
 from factum_fic.core.pipeline import ensure_dirs
 
+# ── Alias italiano → inglese ──────────────────────────────────────────────────
+
+_ALIASES: dict[str, str] = {
+    "configura": "setup",
+    "stato": "status",
+    "storico": "history",
+    "elabora": "sync",
+    "auto": "watch",
+}
+
+
+class _AliasedGroup(TyperGroup):
+    """Click/Typer Group che risolve gli alias italiani automaticamente."""
+
+    def get_command(self, ctx: Any, cmd_name: str) -> Any:
+        cmd = super().get_command(ctx, cmd_name)
+        if cmd is not None:
+            return cmd
+        if cmd_name in _ALIASES:
+            return super().get_command(ctx, _ALIASES[cmd_name])
+        return None
+
+
+# ── App ───────────────────────────────────────────────────────────────────────
+
 app = typer.Typer(
     name="factum-fic",
+    cls=_AliasedGroup,
     help="Registrazione automatica fatture su Fatture in Cloud via Factum Parse API",
     no_args_is_help=True,
+    epilog=(
+        "Alias italiani: configura=setup, stato=status, storico=history, "
+        "elabora=sync, auto=watch"
+    ),
 )
 
 
@@ -34,9 +69,22 @@ def _main(
 ) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(level=level, format="%(levelname)s  %(message)s")
-    # Assicura che le directory da_elaborare/elaborate/errori esistano
     settings = load_settings()
     ensure_dirs(settings)
+
+
+# ── Setup wizard ──────────────────────────────────────────────────────────────
+
+
+@app.command()
+def setup() -> None:
+    """Configurazione guidata interattiva (credenziali, conto, .env)."""
+    from factum_fic.cli.commands.setup import setup as _setup
+
+    _setup()
+
+
+# ── Process singolo file ──────────────────────────────────────────────────────
 
 
 @app.command()
@@ -63,7 +111,6 @@ def process(
         factum = FactumClient(settings)
         fic = FICClient(settings)
         try:
-            # Verifica regime fiscale e aggancia metadati Factum
             try:
                 await verify_and_bind(fic, factum)
             except ForfettarioCheckError as e:
@@ -85,6 +132,128 @@ def process(
             queue.close()
 
     asyncio.run(_run())
+
+
+# ── Sync: inbox o singolo file ────────────────────────────────────────────────
+
+
+@app.command()
+def sync(
+    path: str = typer.Argument(None, help="Percorso del file (opzionale; se omesso elabora inbox/)"),
+    config_file: str = typer.Option("", "--config", "-c", help="Percorso YAML categorie"),
+    force: bool = typer.Option(False, "--force", "-f", help="Ignora deduplicazione e riprocessa"),
+) -> None:
+    """Elabora file fattura: singolo PDF o tutti i file in inbox/."""
+    if path:
+        # Delega a process()
+        from factum_fic.cli.verify import ForfettarioCheckError, verify_and_bind
+        from factum_fic.core.factum_client import FactumClient
+        from factum_fic.core.fic_client import FICClient
+        from factum_fic.core.mapper import Mapper
+        from factum_fic.core.pipeline import process_file
+        from factum_fic.storage.queue import QueueStore
+
+        settings = load_settings()
+        yaml_cfg = load_yaml_config(Path(config_file) if config_file else settings.config_file)
+        mapper = Mapper(yaml_cfg)
+        queue = QueueStore()
+        ensure_dirs(settings)
+
+        async def _run_single() -> None:
+            factum = FactumClient(settings)
+            fic = FICClient(settings)
+            try:
+                try:
+                    await verify_and_bind(fic, factum)
+                except ForfettarioCheckError as e:
+                    print_error(str(e))
+                    raise typer.Exit(code=1) from None
+                result = await process_file(
+                    Path(path),
+                    factum=factum,
+                    fic=fic,
+                    mapper=mapper,
+                    queue=queue,
+                    settings=settings,
+                )
+                print_result_table([result])
+            finally:
+                await factum.close()
+                await fic.close()
+                queue.close()
+
+        asyncio.run(_run_single())
+    else:
+        # Elabora inbox (delega a process_inbox)
+        from factum_fic.core.factum_client import FactumClient
+        from factum_fic.core.fic_client import FICClient
+        from factum_fic.core.mapper import Mapper
+        from factum_fic.core.models import PipelineResult
+        from factum_fic.core.pipeline import is_temp_file, process_file
+        from factum_fic.storage.queue import QueueStore
+
+        settings = load_settings()
+        yaml_cfg = load_yaml_config(Path(config_file) if config_file else settings.config_file)
+        mapper = Mapper(yaml_cfg)
+        queue = QueueStore()
+        ensure_dirs(settings)
+
+        inbox = Path(settings.inbox_dir).expanduser().resolve()
+        files = sorted(
+            p for p in inbox.iterdir()
+            if p.is_file()
+            and not is_temp_file(p)
+            and p.suffix.lower() in {'.pdf', '.xml', '.txt', '.csv', '.png', '.jpg', '.jpeg'}
+        )
+
+        if not files:
+            print_info(f"📂 Nessun file da processare in {inbox}")
+            return
+
+        if force:
+            print_info(f"⚡ Modalità force: deduplicazione disabilitata per {len(files)} file")
+        else:
+            print_info(f"📂 Trovati {len(files)} file in {inbox}")
+
+        async def _run_inbox() -> None:
+            factum = FactumClient(settings)
+            fic = FICClient(settings)
+            results: list[PipelineResult] = []
+
+            from factum_fic.cli.verify import ForfettarioCheckError, verify_and_bind
+            try:
+                await verify_and_bind(fic, factum)
+            except ForfettarioCheckError as e:
+                print_error(str(e))
+                raise typer.Exit(code=1) from None
+
+            try:
+                for p in files:
+                    print_info(f"📄 Elaborazione: {p.name}")
+                    try:
+                        result = await process_file(
+                            p,
+                            factum=factum,
+                            fic=fic,
+                            mapper=mapper,
+                            queue=queue,
+                            settings=settings,
+                            force=force,
+                        )
+                        results.append(result)
+                    except Exception as e:
+                        print_error(f"❌ Errore durante elaborazione {p.name}: {e}")
+                if results:
+                    print_result_table(results)
+            finally:
+                await factum.close()
+                await fic.close()
+                queue.close()
+
+        asyncio.run(_run_inbox())
+
+
+# ── Processa inbox ────────────────────────────────────────────────────────────
 
 
 @app.command()
@@ -128,7 +297,6 @@ def process_inbox(
         fic = FICClient(settings)
         results: list[PipelineResult] = []
 
-        # Verifica regime fiscale una tantum per tutti i file
         from factum_fic.cli.verify import ForfettarioCheckError, verify_and_bind
         try:
             await verify_and_bind(fic, factum)
@@ -162,6 +330,9 @@ def process_inbox(
     asyncio.run(_run())
 
 
+# ── Watch (monitoraggio automatico) ───────────────────────────────────────────
+
+
 @app.command()
 def watch(
     directory: str = typer.Argument(
@@ -180,7 +351,6 @@ def watch(
     from factum_fic.watcher.daemon import WatcherDaemon
 
     settings = load_settings()
-    # Se non è specificata una directory, usa inbox_dir
     if directory:
         settings.watch_dir = directory
     else:
@@ -208,7 +378,6 @@ def watch(
         except Exception as e:
             print_error(f"❌ Errore: {e}")
 
-    # Verifica regime fiscale prima di avviare il watcher
     try:
         asyncio.run(verify_and_bind(fic, factum))
     except ForfettarioCheckError as e:
@@ -234,8 +403,11 @@ def watch(
         queue.close()
 
 
+# ── Queue management ──────────────────────────────────────────────────────────
+
+
 @app.command()
-def queue(
+def queue(  # noqa: PLR0915
     action: str = typer.Argument("status", help="status | retry"),
 ) -> None:
     """Gestisce la coda di elaborazione."""
@@ -260,6 +432,9 @@ def queue(
     else:
         print_error(f"Azione sconosciuta: {action}")
     q.close()
+
+
+# ── Check connettività ────────────────────────────────────────────────────────
 
 
 @app.command()
@@ -296,6 +471,9 @@ def check() -> None:
     asyncio.run(_check())
 
 
+# ── Verify regime fiscale ─────────────────────────────────────────────────────
+
+
 @app.command()
 def verify() -> None:
     """Verifica il regime fiscale dell'azienda su Fatture in Cloud."""
@@ -323,18 +501,18 @@ def verify() -> None:
     asyncio.run(_verify())
 
 
-# ── Dashboard di stato ───────────────────────────────────────────────────────
+# ── Dashboard status ──────────────────────────────────────────────────────────
 
 
 def _tax_regime_label(regime: str) -> str:
     """Traduce il codice regime FIC in etichetta leggibile."""
-    regime_l = (regime or "").strip().lower()
+    r = (regime or "").strip().lower()
     labels = {
         "forfettario": "Regime Forfettario",
         "rf19": "Regime Forfettario (RF19)",
         "ordinario": "Regime Ordinario",
     }
-    return labels.get(regime_l, regime or "—")
+    return labels.get(r, regime or "—")
 
 
 async def collect_status(factum: Any, fic: Any, queue: Any) -> dict:
@@ -346,13 +524,11 @@ async def collect_status(factum: Any, fic: Any, queue: Any) -> dict:
         Dizionario con sezioni: factum, fic, company, payment_account,
         self_invoice, queue.
     """
-    # Factum Parse API
     try:
         factum_ok = await factum.health()
     except Exception:
         factum_ok = False
 
-    # FIC: salute + info azienda
     try:
         fic_ok = await fic.health()
     except Exception:
@@ -365,7 +541,6 @@ async def collect_status(factum: Any, fic: Any, queue: Any) -> dict:
         except Exception:
             company = {}
 
-    # Conto di pagamento attivo per auto-pagamento
     payment_account: dict[str, Any] | None = None
     if fic_ok:
         try:
@@ -373,7 +548,6 @@ async def collect_status(factum: Any, fic: Any, queue: Any) -> dict:
         except Exception:
             payment_account = None
 
-    # Statistiche coda locale
     try:
         queue_summary = queue.summary()
     except Exception:
@@ -399,6 +573,7 @@ async def collect_status(factum: Any, fic: Any, queue: Any) -> dict:
 
 def render_status(data: dict) -> None:
     """Rende il dashboard di stato con Rich."""
+    from rich.console import Group
     from rich.panel import Panel
     from rich.table import Table
 
@@ -409,7 +584,6 @@ def render_status(data: dict) -> None:
     si = data["self_invoice"]
     queue_summary = data["queue"]
 
-    # ── Tabella connessioni ────────────────────────────────────────────
     conn_table = Table(box=None, show_header=False, pad_edge=False)
     conn_table.add_column(style="bold", width=24)
     conn_table.add_column()
@@ -422,32 +596,19 @@ def render_status(data: dict) -> None:
         f"{'✅ OK' if fic_ok else '❌ NON RAGGIUNGIBILE'}  {data['fic']['url']}",
     )
 
-    # ── Tabella azienda ────────────────────────────────────────────────
     company_table = Table(box=None, show_header=False, pad_edge=False)
     company_table.add_column(style="bold", width=24)
     company_table.add_column()
     if fic_ok and company:
         company_table.add_row("Ragione Sociale", company.get("name") or "—")
-        company_table.add_row(
-            "Partita IVA",
-            company.get("vat_number") or "—",
-        )
-        company_table.add_row(
-            "Codice Fiscale",
-            company.get("fiscal_code") or "—",
-        )
+        company_table.add_row("Partita IVA", company.get("vat_number") or "—")
+        company_table.add_row("Codice Fiscale", company.get("fiscal_code") or "—")
         regime = _tax_regime_label(company.get("tax_regime") or "")
-        is_forfettario = (
-            (company.get("tax_regime") or "").strip().lower() in {"forfettario", "rf19"}
-        )
-        company_table.add_row(
-            "Regime Fiscale",
-            f"{regime} {'✅' if is_forfettario else '⚠️ non forfettario'}",
-        )
+        is_forf = (company.get("tax_regime") or "").strip().lower() in {"forfettario", "rf19"}
+        company_table.add_row("Regime Fiscale", f"{regime} {'✅' if is_forf else '⚠️ non forfettario'}")
     else:
         company_table.add_row("Azienda", "Non raggiungibile (verifica credenziali FIC)")
 
-    # ── Tabella conto di pagamento ─────────────────────────────────────
     pay_table = Table(box=None, show_header=False, pad_edge=False)
     pay_table.add_column(style="bold", width=24)
     pay_table.add_column()
@@ -458,21 +619,13 @@ def render_status(data: dict) -> None:
         pay_table.add_row("Conto attivo", "Nessun conto disponibile")
         pay_table.add_row("Auto-pagamento", "⚠️ nessun conto configurato")
 
-    # ── Tabella autofatture SDI ────────────────────────────────────────
     si_table = Table(box=None, show_header=False, pad_edge=False)
     si_table.add_column(style="bold", width=24)
     si_table.add_column()
-    si_table.add_row(
-        "Generazione SDI",
-        f"{'✅ attiva' if si['enabled'] else '❌ disattivata'}",
-    )
+    si_table.add_row("Generazione SDI", f"{'✅ attiva' if si['enabled'] else '❌ disattivata'}")
     si_table.add_row("Sezionale numerazione", si["numeration"])
-    si_table.add_row(
-        "Aliquota IVA (debito F24)",
-        f"{si['vat_value']}% — art. 17 c. 2 DPR 633/72",
-    )
+    si_table.add_row("Aliquota IVA (debito F24)", f"{si['vat_value']}% — art. 17 c. 2 DPR 633/72")
 
-    # ── Tabella coda locale ────────────────────────────────────────────
     q_table = Table(box=None, show_header=False, pad_edge=False)
     q_table.add_column(style="bold", width=24)
     q_table.add_column()
@@ -481,9 +634,6 @@ def render_status(data: dict) -> None:
     q_table.add_row("Autofatture SDI generate", str(queue_summary.get("self_invoices", 0)))
     q_table.add_row("Errori in coda", str(queue_summary.get("errors", 0)))
     q_table.add_row("In attesa", str(queue_summary.get("queued", 0)))
-
-    # ── Assemblaggio ───────────────────────────────────────────────────
-    from rich.console import Group
 
     content = Group(
         "[bold cyan]Connessioni[/]",
@@ -501,11 +651,7 @@ def render_status(data: dict) -> None:
         "[bold cyan]Coda locale SQLite[/]",
         q_table,
     )
-    panel = Panel(
-        content,
-        title="📊 factum-fic status",
-        border_style="cyan",
-    )
+    panel = Panel(content, title="📊 factum-fic status", border_style="cyan")
     console.print(panel)
 
 
@@ -531,3 +677,14 @@ def status() -> None:
             queue.close()
 
     asyncio.run(_run())
+
+
+# ── History ───────────────────────────────────────────────────────────────────
+
+
+@app.command()
+def history() -> None:
+    """Mostra la cronologia delle ultime elaborazioni (10 record)."""
+    from factum_fic.cli.commands.history import history as _history
+
+    _history()

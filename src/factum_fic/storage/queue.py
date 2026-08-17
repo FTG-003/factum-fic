@@ -252,5 +252,38 @@ class QueueStore:
             "queued": _count("SELECT COUNT(*) FROM queue WHERE status = 'queued'"),
         }
 
+    # ── Cronologia (history) ─────────────────────────────────────────────
+
+    def recent(self, limit: int = 10) -> list[dict]:
+        """Restituisce gli ultimi N record elaborati ordinati per data decrescente.
+
+        Args:
+            limit: Numero massimo di record da restituire (default 10).
+
+        Returns:
+            Lista di dizionari con chiavi: sha256, file_path, status,
+            fic_expense_id, fic_self_invoice_id, processed_at, error_message.
+        """
+        cur = self._conn.execute(
+            "SELECT sha256, file_path, status, fic_expense_id, "
+            "fic_self_invoice_id, processed_at, error_message "
+            "FROM queue "
+            "ORDER BY COALESCE(processed_at, updated_at, created_at) DESC "
+            "LIMIT ?",
+            (limit,),
+        )
+        return [
+            {
+                "sha256": row[0],
+                "file_path": row[1],
+                "status": row[2],
+                "fic_expense_id": row[3],
+                "fic_self_invoice_id": row[4],
+                "processed_at": row[5],
+                "error_message": row[6],
+            }
+            for row in cur.fetchall()
+        ]
+
     def close(self) -> None:
         self._conn.close()
