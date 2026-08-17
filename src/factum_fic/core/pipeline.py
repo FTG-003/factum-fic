@@ -53,10 +53,18 @@ _TEMP_FILE_RE = re.compile(
 # ── File lifecycle helpers ────────────────────────────────────────────────────
 
 def ensure_dirs(settings: Settings) -> None:
-    """Crea le directory inbox/processed/failed se non esistono."""
-    for name in ("inbox_dir", "processed_dir", "failed_dir"):
-        path = Path(getattr(settings, name)).expanduser().resolve()
-        path.mkdir(parents=True, exist_ok=True)
+    """Crea le directory inbox e di archiviazione se non esistono.
+
+    Nota zero-clutter: le legacy ``processed_dir``/``failed_dir`` (elaborate/,
+    errori/) non vengono più create — la pipeline usa esclusivamente
+    ``base_storage_dir/archiviate/YYYY/MM`` e ``base_storage_dir/da_verificare``
+    (create on-demand dall'archiver).
+    """
+    inbox = Path(settings.inbox_dir).expanduser().resolve()
+    inbox.mkdir(parents=True, exist_ok=True)
+    base = Path(settings.base_storage_dir).expanduser().resolve()
+    (base / "archiviate").mkdir(parents=True, exist_ok=True)
+    (base / "da_verificare").mkdir(parents=True, exist_ok=True)
 
 
 def is_temp_file(path: Path) -> bool:
@@ -78,13 +86,73 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _parse_amount(value: Any) -> float:
+    """Converte un importo in float gestendo stringhe "50,00 EUR" o "EUR 50.0,00".
+
+    Returns:
+        float dell'importo, 0.0 se non parsabile.
+    """
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        s = value.replace("\u20ac", "").replace("\u20ac", "").strip()
+        m = re.search(r"\d[\d.,]*", s)
+        if not m:
+            return 0.0
+        num = m.group(0)
+        if "," in num and "." in num:
+            num = (
+                num.replace(".", "").replace(",", ".")
+                if num.rfind(",") > num.rfind(".")
+                else num.replace(",", "")
+            )
+        else:
+            num = num.replace(",", ".")
+        try:
+            return float(num)
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def _amount_from_dict(data: dict[str, Any], exact_keys: tuple[str, ...], substrings: tuple[str, ...]) -> float:
+    """Cerca un importo in un dict: prima chiavi esatte, poi per sottostringa.
+
+    Le risposte LLM di Factum usano chiavi variabili (en: net_amount/total_amount,
+    it: netto_totale/iva_importo/totale, miste). Il matching per sottostringa
+    rende la normalizzazione robusta alle variazioni.
+    """
+    for key in exact_keys:
+        val = data.get(key)
+        if val is not None and val != "":
+            parsed = _parse_amount(val)
+            if parsed:
+                return parsed
+    for key, val in data.items():
+        key_lower = key.lower()
+        if any(sub in key_lower for sub in substrings) and val is not None and val != "":
+            parsed = _parse_amount(val)
+            if parsed:
+                return parsed
+    return 0.0
+
+
 def _enrich_from_payload(factum_resp: FactumResponse) -> None:
-    """Arricchisce FactumParseResult da payload.content (envelope v2)."""
+    """Arricchisce FactumParseResult da payload.content (envelope v2).
+
+    Le risposte di Factum sono non deterministiche: a volte gli importi sono
+    in ``payload.content.importi`` (imponibile_totale/iva_totale/
+    totale_documento), altre volte solo in ``raw_extracted`` con chiavi diverse
+    (en: net_amount/vat_amount/total_amount, it: netto_totale/iva_importo/
+    totale). La funzione normalizza entrambe le fonti in ``result.total`` +
+    ``result.raw`` (amount_net/vat/gross) così il mapper ``build_expense``
+    può costruire il payload FIC con importi esatti.
+    """
     result = factum_resp.result
     if result is None:
         return
-    # payload.content è dentro model_extra di result (FactumParseResult)
-    # perché l'API restituisce result.payload.content.*
     extra = getattr(result, "model_extra", {}) or {}
     payload = extra.get("payload")
     if not isinstance(payload, dict):
@@ -93,43 +161,106 @@ def _enrich_from_payload(factum_resp: FactumResponse) -> None:
     if not content:
         return
 
-    # Importi — tenta parsing da raw_extracted se importi è null
+    # ── Importi: normalizza da importi E raw_extracted ────────────────
     importi: dict[str, Any] = content.get("importi", {}) or {}
-    if result.total == 0.0 and importi.get("totale_documento"):
-        result.total = float(importi["totale_documento"])
-    elif result.total == 0.0:
-        # Fallback: cerca amount in raw_extracted (es. "€ 15.69")
-        raw_extracted = content.get("raw_extracted") or {}
-        if isinstance(raw_extracted, dict):
-            for key in ("total_excl_vat", "total", "totale", "totale_documento", "importo_totale"):
-                val = raw_extracted.get(key) or ""
-                if isinstance(val, str) and val:
-                    try:
-                        nums = re.findall(r"[\d]+[.,][\d]+", val.replace("€", "").replace("\u20ac", ""))
-                        if nums:
-                            result.total = float(nums[0].replace(",", "."))
-                            break
-                    except (ValueError, IndexError):
-                        continue
-                elif isinstance(val, (int, float)) and val:
-                    result.total = float(val)
-                    break
-    # Emittente
+    raw_extracted: dict[str, Any] = content.get("raw_extracted", {}) or {}
+    if not isinstance(raw_extracted, dict):
+        raw_extracted = {}
+
+    net = _parse_amount(importi.get("imponibile_totale"))
+    vat = _parse_amount(importi.get("iva_totale"))
+    gross = _parse_amount(importi.get("totale_documento"))
+
+    # Fallback: raw_extracted (chiavi LLM variabili, fuzzy match)
+    if not net:
+        net = _amount_from_dict(raw_extracted, ("amount_net",), ("netto", "net_amount"))
+    if not vat:
+        vat = _amount_from_dict(raw_extracted, ("amount_vat",), ("iva", "vat_amount"))
+    if not gross:
+        gross = _amount_from_dict(raw_extracted, ("amount_gross",), ("totale", "total_amount", "importo"))
+
+    # Fallback: somma items estratti (raw_extracted.items[].net_amount)
+    if not gross:
+        items_raw = raw_extracted.get("items") or []
+        if isinstance(items_raw, list):
+            total_items = 0.0
+            for item in items_raw:
+                if isinstance(item, dict):
+                    total_items += _parse_amount(item.get("net_amount"))
+            if total_items:
+                gross = total_items
+                if not net:
+                    net = total_items
+
+    if gross:
+        result.total = round(gross, 2)
+    if not net:
+        net = gross
+    if not vat:
+        vat = 0.0
+
+    # Espone net/vat/gross normalizzati in result.raw per build_expense
+    raw_norm = dict(result.raw or {})
+    raw_norm.setdefault("amount_net", round(net, 2))
+    raw_norm.setdefault("amount_vat", round(vat, 2))
+    raw_norm.setdefault("amount_gross", round(gross, 2))
+    result.raw = raw_norm
+
+    # ── Emittente ─────────────────────────────────────────────────────
     if not result.supplier_name:
         emittente: dict[str, Any] = content.get("emittente", {}) or {}
         result.supplier_name = emittente.get("ragione_sociale") or ""
         result.supplier_vat = emittente.get("partita_iva") or ""
         result.supplier_address = emittente.get("indirizzo") or ""
-    # Date / numero
+    # Fallback nome fornitore da raw_extracted (chiavi LLM variabili)
+    if not result.supplier_name:
+        for key in ("fornitore", "ragione_sociale", "supplier_name", "vendor", "company", "nome"):
+            candidate = raw_extracted.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                result.supplier_name = candidate.strip()
+                break
+    if not result.supplier_vat:
+        for key in ("partita_iva", "vat_number", "p_iva", "iva"):
+            candidate = raw_extracted.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                result.supplier_vat = candidate.strip()
+                break
+    if not result.supplier_country:
+        emittente = content.get("emittente", {}) or {}
+        country_candidate = (
+            emittente.get("paese")
+            or emittente.get("country")
+            or emittente.get("country_iso")
+            or ""
+        )
+        country_hint = str(country_candidate or result.supplier_address or result.supplier_name)
+        country_map = {
+            "germany": "DE", "deutschland": "DE", "de": "DE", "tedesco": "DE",
+            "francia": "FR", "france": "FR", "frankreich": "FR",
+            "spagna": "ES", "spain": "ES", "spanien": "ES",
+            "austria": "AT", "\u00f6sterreich": "AT",
+            "paesi bassi": "NL", "netherlands": "NL", "niederlande": "NL", "oland": "NL",
+            "irlanda": "IE", "ireland": "IE", "irland": "IE",
+            "usa": "US", "united states": "US", "stati uniti": "US",
+            "regno unito": "GB", "united kingdom": "GB", "great britain": "GB",
+            "svizzera": "CH", "switzerland": "CH", "schweiz": "CH",
+        }
+        hint_lower = country_hint.lower()
+        for keyword, iso in country_map.items():
+            if keyword in hint_lower:
+                result.supplier_country = iso
+                break
+
+    # ── Date / numero ──────────────────────────────────────────────────
     if not result.invoice_date:
         dati_doc: dict[str, Any] = content.get("dati_documento", {}) or {}
         result.invoice_date = dati_doc.get("data_emissione") or ""
         result.invoice_number = dati_doc.get("numero") or ""
-    # raw_extracted → raw
-    if not result.raw:
-        raw_extracted = content.get("raw_extracted") or {}
-        if isinstance(raw_extracted, dict):
-            result.raw = raw_extracted
+    # raw_extracted → raw (senza sovrascrivere net/vat/gross normalizzati)
+    raw_extra = content.get("raw_extracted") or {}
+    if isinstance(raw_extra, dict):
+        for k, v in raw_extra.items():
+            result.raw.setdefault(k, v)
     # Document type reale (non wrapper legacy "generic")
     inner_dt = content.get("document_type")
     if inner_dt:
@@ -141,12 +272,20 @@ async def _ensure_fic_supplier(
     supplier: Any,
     expense: Any,
 ) -> int | None:
-    """Cerca o crea un fornitore su FIC. Restituisce l'entity_id."""
+    """Cerca o crea un fornitore su FIC. Restituisce l'entity_id.
+
+    Aggiorna ``supplier.name`` con il nome reale su FIC (utile per
+    autofattura SDI che richiede entity.name nel payload).
+    """
     existing = await fic.search_supplier(supplier.name, supplier.vat_number)
     if existing:
         entity_id = existing.get("id")
         expense.entity_id = entity_id
         expense.entity = None
+        # Aggiorna supplier.name con il nome reale su FIC
+        fic_name = existing.get("name") or ""
+        if fic_name:
+            supplier.name = fic_name
         return entity_id
     created = await fic.create_supplier(supplier)
     entity_id = created.get("data", {}).get("id")
@@ -188,6 +327,8 @@ async def _check_fic_exists(
         )
         queue.complete(sha, doc_id)
         base_dir = Path(settings.base_storage_dir)
+        # Cattura stat PRIMA dello spostamento
+        file_size = path.stat().st_size
         try:
             archive_processed_file(path, base_dir)
         except Exception as exc:
@@ -197,7 +338,7 @@ async def _check_fic_exists(
                 path=str(path),
                 sha256=sha,
                 filename=path.name,
-                size_bytes=path.stat().st_size,
+                size_bytes=file_size,
             ),
             status=DocumentStatus.SKIPPED,
             factum_status="done",
@@ -442,6 +583,11 @@ async def process_file(
             fic_resp.id, fic_self_invoice_id,
         )
 
+        # Cattura i dati estratti da Factum PRIMA che `result` venga riassegnato
+        archive_date = result.invoice_date or None
+        archive_supplier = result.supplier_name or None
+        archive_number = result.invoice_number or None
+
         result = PipelineResult(
             file=file_event,
             status=DocumentStatus.RECORDED,
@@ -456,9 +602,9 @@ async def process_file(
             archive_processed_file(
                 path,
                 base_dir,
-                date_str=result.invoice_date or None,
-                supplier_name=result.supplier_name or None,
-                invoice_num=result.invoice_number or None,
+                date_str=archive_date,
+                supplier_name=archive_supplier,
+                invoice_num=archive_number,
             )
         except Exception as exc:
             logger.warning("Fallito spostamento successo: %s", exc)

@@ -309,44 +309,47 @@ class FICClient:
             FICIssuedDocumentResponse con id e stato del documento creato.
         """
         gross = doc.amount_gross or (doc.amount_net + doc.amount_vat)
+        # FIC v2 con e_invoice richiede entity.name (non solo id) altrimenti 422
+        entity_payload: dict[str, Any] = {"id": doc.entity_id}
+        if doc.supplier_name:
+            entity_payload["name"] = doc.supplier_name
         fic_payload: dict[str, Any] = {
             "type": "self_supplier_invoice",
-            "entity": {"id": doc.entity_id},
+            "entity": entity_payload,
             "date": doc.date,
             "numeration": doc.numeration,
             "description": doc.description,
-            "amount_net": doc.amount_net,
-            "amount_vat": doc.amount_vat,
-            "amount_gross": round(gross, 2),
+            "amount_net": float(doc.amount_net),
+            "amount_vat": float(doc.amount_vat),
+            "amount_gross": round(float(gross), 2),
             "notes": doc.notes,
             "items_list": [
                 {
-                    "name": doc.description or "Acquisto servizi esteri",
-                    "net_price": doc.amount_net,
-                    "vat": {"value": doc.vat_value},
+                    "name": doc.description or "Servizi software / hosting estero",
+                    "net_price": float(doc.amount_net),
+                    "qty": 1,
+                    "vat": {"id": 0, "value": doc.vat_value},
                 }
             ],
             "payments_list": [
                 {
-                    "amount": round(gross, 2),
+                    "amount": round(float(gross), 2),
                     "due_date": doc.date,
                 }
             ],
         }
 
-        # Nodo SDI e_invoice (ei_raw) per trasmissione telematica
-        fic_payload["e_invoice"] = {
-            "document_type": doc.self_invoice_type.value,
-            "original_supplier": {
-                "name": doc.supplier_name,
-                "vat_number": doc.supplier_vat_number,
-                "country_iso": doc.supplier_country_iso,
-            },
+        # Attiva trasmissione SDI (booleano) per autofattura esteri.
+        # Occorre fornire anche ei_data (payment_method, ecc.) altrimenti
+        # FIC restituisce 422. Se il campo venisse rifiutato (es. 403
+        # NO_PERMISSION o 422 per mancanza di ei_data), la pipeline gestisce
+        # il fallimento gracefulmente (log warning + prosegue).
+        fic_payload["e_invoice"] = True
+        fic_payload["ei_data"] = {
+            "payment_method": "MP08",
+            "vat_kind": "I",
+            "reverse_charge": "N6.3",  # acquisto servizi esteri art. 17 c. 2
         }
-        if doc.original_document_id is not None:
-            fic_payload["e_invoice"]["original_document_id"] = doc.original_document_id
-        if doc.original_document_description:
-            fic_payload["e_invoice"]["original_document_description"] = doc.original_document_description
 
         payload = {"data": fic_payload}
         response = await self._client.post(
@@ -414,9 +417,11 @@ class FICClient:
             if do_paid:
                 payment_account_id = await self._resolve_payment_account()
                 if payment_account_id is not None:
+                    # FIC v2: status "paid" richiede paid_date + payment_account
+                    # (oggetto, non payment_account_id flat) altrimenti viene ignorato
                     payment_entry["status"] = "paid"
-                    payment_entry["payment_date"] = expense.date or datetime.date.today().isoformat()
-                    payment_entry["payment_account_id"] = payment_account_id
+                    payment_entry["paid_date"] = expense.date or datetime.date.today().isoformat()
+                    payment_entry["payment_account"] = {"id": payment_account_id}
                 else:
                     logger.warning(
                         "Auto-pagamento abilitato ma nessun conto disponibile: "
@@ -431,7 +436,8 @@ class FICClient:
         fic_payload["items_list"] = [
             {
                 "name": expense.description or "Acquisto servizi",
-                "net_price": expense.amount_net,
+                "net_price": float(expense.amount_net),
+                "qty": 1,
                 "category": expense.category or "Servizi",
                 "tax_deductibility": 100,
                 "vat_deductibility": 0,

@@ -168,14 +168,14 @@ class TestVerifyAndBind:
         try:
             with pytest.raises(ForfettarioCheckError) as exc:
                 await verify_and_bind(fic, factum)
-            assert "riservato esclusivamente" in str(exc.value).lower() and "forfettario" in str(exc.value).lower()
+            assert "Richiede Regime Forfettario" in str(exc.value) or "Regime Forfettario" in str(exc.value)
         finally:
             await fic.close()
             await factum.close()
 
     @pytest.mark.asyncio
-    async def test_empty_tax_regime_raises(self) -> None:
-        """Regime vuoto deve sollevare ForfettarioCheckError."""
+    async def test_empty_tax_regime_passes(self) -> None:
+        """Regime vuoto deve proseguire con warning log (non bloccare)."""
         company = dict(_VALID_COMPANY, tax_regime="")
         settings = _make_settings()
         fic = FICClient(settings)
@@ -183,8 +183,9 @@ class TestVerifyAndBind:
         fic._client = _make_fic_client(transport=_mock_fic_company(company))
 
         try:
-            with pytest.raises(ForfettarioCheckError):
-                await verify_and_bind(fic)
+            info = await verify_and_bind(fic)
+            assert info["tax_regime"] == ""
+            assert info["vat_number"] == "IT01234567890"
         finally:
             await fic.close()
 
@@ -477,8 +478,8 @@ class TestAutoPaid:
             assert len(payments) == 1
             payment = payments[0]
             assert payment["status"] == "paid"
-            assert payment["payment_date"] == "2026-01-15"
-            assert payment["payment_account_id"] == 42
+            assert payment["paid_date"] == "2026-01-15"
+            assert payment["payment_account"] == {"id": 42}
             assert payment["amount"] == 100.0
         finally:
             await fic.close()
@@ -511,8 +512,8 @@ class TestAutoPaid:
             payments = sent_payloads[0].get("data", {}).get("payments_list", [])
             assert len(payments) == 1
             assert "status" not in payments[0]
-            assert "payment_date" not in payments[0]
-            assert "payment_account_id" not in payments[0]
+            assert "paid_date" not in payments[0]
+            assert "payment_account" not in payments[0]
         finally:
             await fic.close()
 
@@ -546,7 +547,7 @@ class TestAutoPaid:
             payments = sent_payloads[0].get("data", {}).get("payments_list", [])
             assert len(payments) == 1
             assert "status" not in payments[0]
-            assert "payment_date" not in payments[0]
+            assert "paid_date" not in payments[0]
         finally:
             await fic.close()
 
@@ -586,7 +587,7 @@ class TestAutoPaid:
             assert len(sent_payloads) == 1
             payments = sent_payloads[0].get("data", {}).get("payments_list", [])
             assert len(payments) == 1
-            assert payments[0]["payment_account_id"] == 20
+            assert payments[0]["payment_account"] == {"id": 20}
         finally:
             await fic.close()
 
@@ -618,7 +619,7 @@ class TestAutoPaid:
             assert len(sent_payloads) == 1
             payments = sent_payloads[0].get("data", {}).get("payments_list", [])
             assert len(payments) == 1
-            assert payments[0]["payment_account_id"] == 99
+            assert payments[0]["payment_account"] == {"id": 99}
         finally:
             await fic.close()
 

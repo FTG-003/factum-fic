@@ -75,12 +75,14 @@ class QueueStore:
         if "error_message" not in existing:
             self._conn.execute("ALTER TABLE queue ADD COLUMN error_message TEXT")
 
-        # Copia dati legacy: path → file_path, fic_id → fic_expense_id
+        # Migrazione v1 → v2: copia dati legacy (path → file_path, fic_id → fic_expense_id)
         if "path" in existing:
             self._conn.execute(
                 "UPDATE queue SET file_path = path "
                 "WHERE file_path = '' AND path != ''"
             )
+            # Rimuove la vecchia colonna NOT NULL senza default
+            self._conn.execute("ALTER TABLE queue DROP COLUMN path")
         if "fic_id" in existing:
             self._conn.execute(
                 "UPDATE queue SET fic_expense_id = fic_id "

@@ -39,6 +39,7 @@ dependencies = [
 dev = [
     "pytest >= 8.0.0",
     "ruff >= 0.4.0",
+    "reportlab >= 4.0.0",
 ]
 
 [project.scripts]
@@ -65,4 +66,5 @@ source = ["factum_fic"]
 [dependency-groups]
 dev = [
     "pytest-asyncio>=1.4.0",
+    "reportlab>=4.0.0",
 ]

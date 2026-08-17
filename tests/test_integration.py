@@ -267,8 +267,10 @@ def _mock_fic_transport() -> httpx.MockTransport:
 
 
 @pytest.fixture
-def mock_settings() -> Settings:
-    """Settings con valori mock."""
+def mock_settings(tmp_path: Path) -> Settings:
+    """Settings con valori mock (storage in tmp, mai nella root del progetto)."""
+    storage_dir = tmp_path / "storage"
+    storage_dir.mkdir(parents=True, exist_ok=True)
     return Settings(  # type: ignore[call-arg]
         FACTUM_API_URL="https://mock.factum.test",
         FACTUM_API_KEY="mock-key",
@@ -276,6 +278,7 @@ def mock_settings() -> Settings:
         FIC_API_KEY="mock-fic-token",
         FIC_COMPANY_ID="99999",
         WATCH_DIR="/tmp",
+        BASE_STORAGE_DIR=str(storage_dir),
     )
 
 
