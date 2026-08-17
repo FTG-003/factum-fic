@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" font-family="'Inter','Segoe UI','SF Pro','system-ui',sans-serif">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f0f17"/>
+      <stop offset="100%" stop-color="#1a1b2e"/>
+    </linearGradient>
+    <linearGradient id="boxXml" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2e3a59"/>
+      <stop offset="100%" stop-color="#1e2a49"/>
+    </linearGradient>
+    <linearGradient id="boxPdf" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3d2e59"/>
+      <stop offset="100%" stop-color="#2d1e49"/>
+    </linearGradient>
+    <linearGradient id="boxMapper" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2e5940"/>
+      <stop offset="100%" stop-color="#1e4930"/>
+    </linearGradient>
+    <linearGradient id="boxFic" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#59402e"/>
+      <stop offset="100%" stop-color="#49301e"/>
+    </linearGradient>
+    <linearGradient id="boxArchive" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3a3a50"/>
+      <stop offset="100%" stop-color="#2a2a40"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+    <filter id="glow">
+      <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#7aa2f7" flood-opacity="0.15"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#565f89"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9ece6a"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="560" fill="url(#bgGrad)" rx="16"/>
+  
+  <!-- Title -->
+  <text x="450" y="45" text-anchor="middle" fill="#c0caf5" font-size="22" font-weight="700">Architettura di Factum FIC</text>
+  <text x="450" y="68" text-anchor="middle" fill="#565f89" font-size="13">Da fattura digitale a Fatture in Cloud — pipeline deterministica</text>
+
+  <!-- Layer: Input files -->
+  <rect x="50" y="100" width="200" height="64" rx="10" fill="url(#boxXml)" filter="url(#shadow)"/>
+  <text x="150" y="127" text-anchor="middle" fill="#c0caf5" font-size="15" font-weight="600">🏛️ XML FatturaPA</text>
+  <text x="150" y="148" text-anchor="middle" fill="#565f89" font-size="12">parsing locale deterministico</text>
+
+  <rect x="350" y="100" width="200" height="64" rx="10" fill="url(#boxPdf)" filter="url(#shadow)"/>
+  <text x="450" y="127" text-anchor="middle" fill="#c0caf5" font-size="15" font-weight="600">🧾 PDF fattura</text>
+  <text x="450" y="148" text-anchor="middle" fill="#565f89" font-size="12">estrazione via Factum Parse API</text>
+
+  <rect x="650" y="100" width="200" height="64" rx="10" fill="url(#boxPdf)" filter="url(#shadow)"/>
+  <text x="750" y="127" text-anchor="middle" fill="#c0caf5" font-size="15" font-weight="600">📎 Altri PDF</text>
+  <text x="750" y="148" text-anchor="middle" fill="#565f89" font-size="12">scontrini, documenti spesa</text>
+
+  <!-- Decision diamond -->
+  <path d="M 450 184 L 500 200 L 450 216 L 400 200 Z" fill="none" stroke="#565f89" stroke-width="1.5"/>
+  <text x="450" y="204" text-anchor="middle" fill="#565f89" font-size="10">.xml?</text>
+
+  <!-- XML path arrow (down from XML box) -->
+  <line x1="150" y1="164" x2="150" y2="200" stroke="#565f89" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <!-- PDF path arrows -->
+  <line x1="450" y1="164" x2="450" y2="200" stroke="#565f89" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="750" y1="164" x2="750" y2="200" stroke="#565f89" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Arrow from decision to parser -->
+  <line x1="450" y1="216" x2="450" y2="240" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Center pipeline box -->
+  <rect x="300" y="240" width="300" height="60" rx="12" fill="url(#boxMapper)" filter="url(#shadow)"/>
+  <text x="450" y="267" text-anchor="middle" fill="#c0caf5" font-size="15" font-weight="600">🔧 Fattura → Spesa FIC</text>
+  <text x="450" y="288" text-anchor="middle" fill="#565f89" font-size="12">Mapper + Reverse charge detection</text>
+
+  <!-- Arrow to FIC -->
+  <line x1="450" y1="300" x2="450" y2="340" stroke="#565f89" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- FIC operations -->
+  <rect x="200" y="340" width="500" height="80" rx="12" fill="url(#boxFic)" filter="url(#shadow)"/>
+  
+  <text x="230" y="368" fill="#73daca" font-size="14">1.</text>
+  <text x="248" y="368" fill="#c0caf5" font-size="13">Upload allegato</text>
+  <text x="390" y="368" fill="#565f89" font-size="12">get_attachment_token()</text>
+
+  <text x="230" y="394" fill="#73daca" font-size="14">2.</text>
+  <text x="248" y="394" fill="#c0caf5" font-size="13">Crea spesa</text>
+  <text x="390" y="394" fill="#565f89" font-size="12">create_expense()</text>
+
+  <text x="230" y="420" fill="#73daca" font-size="14">3.</text>
+  <text x="248" y="420" fill="#c0caf5" font-size="13">(se RC) Genera autofattura</text>
+  <text x="540" y="420" fill="#565f89" font-size="12">create_issued_document()</text>
+
+  <!-- Arrow to archive -->
+  <line x1="450" y1="420" x2="450" y2="460" stroke="#565f89" stroke-width="2" marker-end="url(#arrowGreen)"/>
+
+  <!-- Archive box -->
+  <rect x="275" y="460" width="350" height="50" rx="10" fill="url(#boxArchive)" filter="url(#shadow)"/>
+  <text x="450" y="484" text-anchor="middle" fill="#c0caf5" font-size="14" font-weight="600">📁 Archiviazione automatica</text>
+  <text x="450" y="502" text-anchor="middle" fill="#565f89" font-size="11">archiviate/YYYY/MM/Fornitore_Numero.pdf</text>
+
+  <!-- Extra: zero LLM badge on XML -->
+  <rect x="70" y="170" width="155" height="24" rx="12" fill="#2d4a3e" opacity="0.9"/>
+  <text x="147" y="186" text-anchor="middle" fill="#9ece6a" font-size="11" font-weight="600">0 token LLM · 100% locale</text>
+
+  <!-- Extra: LLM badge on PDF -->
+  <rect x="370" y="170" width="155" height="24" rx="12" fill="#4a3d2d" opacity="0.9"/>
+  <text x="447" y="186" text-anchor="middle" fill="#e0af68" font-size="11" font-weight="600">solo testo · mai il file</text>
+
+  <!-- Legend -->
+  <rect x="50" y="520" width="12" height="12" rx="3" fill="#2e3a59"/>
+  <text x="68" y="531" fill="#565f89" font-size="11">XML/SDI</text>
+  <rect x="150" y="520" width="12" height="12" rx="3" fill="#3d2e59"/>
+  <text x="168" y="531" fill="#565f89" font-size="11">PDF</text>
+  <rect x="240" y="520" width="12" height="12" rx="3" fill="#2e5940"/>
+  <text x="258" y="531" fill="#565f89" font-size="11">Mapping</text>
+  <rect x="350" y="520" width="12" height="12" rx="3" fill="#59402e"/>
+  <text x="368" y="531" fill="#565f89" font-size="11">FIC v2</text>
+</svg>

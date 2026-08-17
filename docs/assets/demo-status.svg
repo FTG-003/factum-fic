@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 480" font-family="'SF Mono','Fira Code','Cascadia Code','Consolas',monospace">
+  <defs>
+    <linearGradient id="termBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="100%" stop-color="#0f0f17"/>
+    </linearGradient>
+    <linearGradient id="titleBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2d2d44"/>
+      <stop offset="100%" stop-color="#1a1b26"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+
+  <!-- Terminal window -->
+  <rect x="20" y="20" width="680" height="440" rx="10" fill="url(#termBg)" filter="url(#shadow)"/>
+  
+  <!-- Title bar -->
+  <rect x="20" y="20" width="680" height="40" rx="10" fill="url(#titleBar)"/>
+  <rect x="20" y="40" width="680" height="20" fill="url(#titleBar)"/>
+  
+  <!-- Window buttons -->
+  <circle cx="48" cy="40" r="7" fill="#ff5f57"/>
+  <circle cx="70" cy="40" r="7" fill="#fdbc40"/>
+  <circle cx="92" cy="40" r="7" fill="#33c748"/>
+  
+  <!-- Title -->
+  <text x="360" y="45" text-anchor="middle" fill="#888" font-size="13" font-weight="600">factum-fic status</text>
+  
+  <!-- Prompt -->
+  <text x="40" y="95" fill="#7aa2f7" font-size="14">$</text>
+  <text x="58" y="95" fill="#c0caf5" font-size="14">factum-fic status</text>
+  
+  <text x="40" y="125" fill="#565f89" font-size="14">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</text>
+  
+  <!-- API status -->
+  <text x="40" y="155" fill="#89ddff" font-size="14">🌐</text>
+  <text x="64" y="155" fill="#565f89" font-size="14">Factum API:</text>
+  <text x="195" y="155" fill="#9ece6a" font-size="14">✅</text>
+  <text x="212" y="155" fill="#9ece6a" font-size="14">ok</text>
+  
+  <text x="40" y="180" fill="#89ddff" font-size="14">☁️</text>
+  <text x="64" y="180" fill="#565f89" font-size="14">Fatture in Cloud:</text>
+  <text x="195" y="180" fill="#9ece6a" font-size="14">✅</text>
+  <text x="212" y="180" fill="#9ece6a" font-size="14">ok</text>
+  <text x="260" y="180" fill="#565f89" font-size="13">(azienda: La Mia SRL)</text>
+  
+  <text x="40" y="205" fill="#89ddff" font-size="14">🏦</text>
+  <text x="64" y="205" fill="#565f89" font-size="14">Conto pagamento:</text>
+  <text x="195" y="205" fill="#9ece6a" font-size="14">✅</text>
+  <text x="212" y="205" fill="#c0caf5" font-size="14">Banca Intesa</text>
+  <text x="370" y="205" fill="#565f89" font-size="13">(IT12X1234567890)</text>
+  
+  <text x="40" y="235" fill="#565f89" font-size="14">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</text>
+  
+  <!-- Queue stats header -->
+  <text x="40" y="265" fill="#89ddff" font-size="14">📦</text>
+  <text x="64" y="265" fill="#c0caf5" font-size="14" font-weight="600">Coda elaborazione</text>
+  
+  <!-- Queue table - header -->
+  <text x="64" y="295" fill="#565f89" font-size="13">Metrica</text>
+  <text x="280" y="295" fill="#565f89" font-size="13" text-anchor="end">Valore</text>
+  
+  <text x="40" y="310" fill="#3b3d4f" font-size="13">─────────────────────────────────────</text>
+  
+  <!-- Queue rows -->
+  <text x="64" y="338" fill="#a9b1d6" font-size="14">Processati</text>
+  <text x="280" y="338" fill="#c0caf5" font-size="14" text-anchor="end" font-weight="600">47</text>
+  
+  <text x="64" y="363" fill="#a9b1d6" font-size="14">Spese FIC</text>
+  <text x="280" y="363" fill="#c0caf5" font-size="14" text-anchor="end" font-weight="600">47</text>
+  
+  <text x="64" y="388" fill="#a9b1d6" font-size="14">Autofatture</text>
+  <text x="280" y="388" fill="#73daca" font-size="14" text-anchor="end" font-weight="600">12</text>
+  
+  <text x="64" y="413" fill="#a9b1d6" font-size="14">In coda</text>
+  <text x="280" y="413" fill="#ff9e64" font-size="14" text-anchor="end" font-weight="600">3</text>
+  
+  <text x="64" y="438" fill="#a9b1d6" font-size="14">Errori</text>
+  <text x="280" y="438" fill="#ff757f" font-size="14" text-anchor="end" font-weight="600">0</text>
+  
+  <!-- Cursor -->
+  <rect x="310" y="426" width="2" height="16" fill="#c0caf5" opacity="0.8">
+    <animate attributeName="opacity" values="0.8;0;0.8" dur="1s" repeatCount="indefinite"/>
+  </rect>
+</svg>
