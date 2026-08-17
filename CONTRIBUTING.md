@@ -1,88 +1,89 @@
-# Contributing to factum-fic
+# Contribuire a Factum FIC
 
-First off, thanks for taking the time to contribute! 🎉
+Grazie per aver deciso di contribuire! 🎉
 
-factum-fic is an **open-core** project. The core engine is free and open-source under
-AGPL-3.0. Contributions of all kinds are welcome — code, documentation, bug reports,
-feature ideas, or translations.
-
----
-
-## 📋 Code of Conduct
-
-This project adheres to a [Code of Conduct](CODE_OF_CONDUCT.md). By participating,
-you are expected to uphold it. Report unacceptable behavior to info@pyragogy.org.
+Factum FIC è un progetto **Open Core**. Il motore principale è gratuito e open
+source (AGPL-3.0). Ogni contributo è benvenuto — codice, documentazione,
+segnalazioni di bug, idee o traduzioni.
 
 ---
 
-## 🚀 Quick start
+## 📋 Codice di Condotta
+
+Questo progetto adotta un [Codice di Condotta](CODE_OF_CONDUCT.md).
+Partecipando, ti impegni a rispettarlo. Segnala comportamenti inaccettabili
+a **info@pyragogy.org**.
+
+---
+
+## 🚀 Primi passi
 
 ```bash
-# Clone & enter
-git clone https://github.com/pyragogy/factum-fic.git
+# Clona
+git clone https://github.com/FTG-003/factum-fic.git
 cd factum-fic
 
-# Install with uv (recommended) or pip
+# Installa con uv (consigliato)
 uv sync --all-extras --dev
 
-# Run tests
+# Avvia i test
 uv run pytest -q
 
 # Lint
 uv run ruff check .
 
-# Try it
+# Prova
 uv run factum-fic --help
 ```
 
 ---
 
-## 🧪 Before submitting a PR
+## 🧪 Prima di inviare una PR
 
-1. **One feature per PR** — small, focused changes are reviewed faster.
-2. **Tests are required** — new features need new tests; `pytest -q` must pass.
-3. **Ruff-clean** — run `ruff check .` before pushing; the CI will enforce it.
-4. **No secrets ever** — `.env` is gitignored. Never commit API keys, tokens, or passwords.
-5. **Commit messages** follow [Conventional Commits](https://www.conventionalcommits.org/):
-   - `feat:` — new feature (minor version bump)
-   - `fix:` — bug fix (patch version bump)
-   - `docs:` — documentation only
-   - `refactor:` — code change with no functional difference
-   - `test:` — adding or updating tests
-   - `chore:` — tooling, CI, dependencies
+1. **Una funzionalità per PR** — piccole modifiche mirate vengono revisionate prima.
+2. **Test richiesti** — nuove funzionalità richiedono nuovi test; `pytest -q` deve passare.
+3. **Ruff pulito** — esegui `ruff check .` prima di pushare; la CI lo impone.
+4. **Niente segreti** — `.env` è gitignorato. Mai committare API key, token o password.
+5. **Messaggi di commit** seguono [Conventional Commits](https://www.conventionalcommits.org/):
+   - `feat:` — nuova funzionalità
+   - `fix:` — correzione bug
+   - `docs:` — solo documentazione
+   - `refactor:` — modifica senza cambiamento funzionale
+   - `test:` — nuovi test o aggiornamento
+   - `chore:` — tooling, CI, dipendenze
 
 ---
 
-## 📁 Structure
+## 📁 Struttura
 
 ```
 factum-fic/
-├── src/factum_fic/         # Source code
-│   ├── cli/                # CLI commands (elabora, status, history, setup, verify)
-│   ├── core/               # Core logic (parser, pipeline, mappers, clients)
-│   ├── storage/            # SQLite queue
-│   └── watcher/            # Watchdog daemon
-├── tests/                  # Pytest suite (168+ tests)
-├── scripts/                # Utility scripts (test PDF generation)
-├── .github/                # CI workflows, assets
-└── docs/                   # Documentation
+├── src/factum_fic/         # Codice sorgente
+│   ├── cli/                # Comandi CLI (elabora, status, history, setup, verify)
+│   ├── core/               # Logica principale (parser, pipeline, mapper, client)
+│   ├── storage/            # Coda SQLite
+│   └── watcher/            # Demone watchdog
+├── tests/                  # Suite pytest (185+ test)
+├── scripts/                # Script di utilità
+├── .github/                # CI workflow, asset grafici
+└── docs/                   # Documentazione
 ```
 
 ---
 
-## 🔐 Security
+## 🔐 Sicurezza
 
-If you discover a security vulnerability, **do not open a public issue**. Email
-info@pyragogy.org instead. See [SECURITY.md](SECURITY.md) for details.
-
----
-
-## 📖 More
-
-- [README.md](README.md) — project overview
-- [ROADMAP.md](ROADMAP.md) — planned features
-- [ARCHITECTURE.md](docs/architecture.md) — system design (coming soon)
+Se scopri una vulnerabilità di sicurezza, **non aprire una issue pubblica**.
+Scrivi a **info@pyragogy.org**. Vedi [SECURITY.md](SECURITY.md) per dettagli.
 
 ---
 
-*Made with ❤️ by Fabrizio Terzi and contributors.*
+## 📖 Riferimenti
+
+- [README.md](README.md) — panoramica del progetto
+- [ROADMAP.md](ROADMAP.md) — funzionalità pianificate
+- [LICENSE](LICENSE) — AGPL-3.0
+
+---
+
+*Fatto con ❤️ da Fabrizio Terzi e collaboratori.*

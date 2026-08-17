@@ -84,7 +84,7 @@ registrazione contabile su **Fatture in Cloud v2**.
 uv tool install factum-fic
 
 # Oppure da sorgente
-git clone https://github.com/pyragogy/factum-fic.git
+git clone https://github.com/FTG-003/factum-fic.git
 cd factum-fic
 uv sync --dev
 ```
@@ -146,17 +146,18 @@ La corretta gestione del reverse charge è fondamentale per la contabilità IVA.
 | Fornitore IT, forfettario | IT | 0,00 | **N2.2** | ❌ No | — |
 | Fornitore IT, esente art.10 | IT | 0,00 | **N4** | ❌ No | — |
 | Fornitore IT, inversione contabile | IT | 0,00 | **N6.x** | ✅ Sì | TD16 |
-| Fornitore DE, IVA applicata | DE | 3,45 | assente | ❌ No | TD18 |
-| Fornitore DE, IVA zero | DE | 0,00 | assente | ✅ Sì | TD17 |
+| Fornitore DE con P.IVA, IVA≠0 | DE | 3,45 | assente | ❌ No | Spesa diretta |
+| Fornitore DE con P.IVA, IVA=0 | DE | 0,00 | assente | ✅ Sì | **TD18** |
+| Fornitore DE senza P.IVA, IVA=0 | DE | 0,00 | assente | ✅ Sì | **TD19** |
 | Fornitore USA, IVA zero | US | 0,00 | assente | ✅ Sì | TD17 |
 
 ### Tipi di autofattura SDI
 
 | Codice | Descrizione | Quando si usa |
 |---|---|---|
-| **TD17** | Autofattura per acquisto extra-UE | Fornitore extra-UE, IVA=0 → reverse charge |
-| **TD18** | Autofattura per acquisto intra-UE | Fornitore intra-UE, IVA≠0 → reverse charge parziale |
-| **TD19** | Autofattura per acquisto intra-UE con IVA esposta | Fornitore intra-UE, IVA=0 → reverse charge pieno |
+| **TD17** | Autofattura per acquisto servizi extra-UE | Fornitore extra-UE (es. USA, UK, Svizzera) |
+| **TD18** | Autofattura per acquisto intra-UE con P.IVA | Fornitore UE con partita IVA valida |
+| **TD19** | Autofattura per acquisto intra-UE senza P.IVA | Fornitore UE senza partita IVA valida |
 
 ### Codici Natura (FatturaPA)
 
