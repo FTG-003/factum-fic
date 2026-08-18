@@ -197,6 +197,7 @@ class FICCreateExpenseRequest(BaseModel):
     due_date: str = ""
     category: str = "Altri costi"
     description: str = ""
+    invoice_number: str = ""
     amount_net: float = 0.0
     amount_vat: float = 0.0
     amount_gross: float | None = None

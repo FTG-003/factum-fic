@@ -323,6 +323,7 @@ class Mapper:
             due_date=due_date,
             category=category,
             description=description,
+            invoice_number=result.invoice_number or "",
             amount_net=net,
             amount_vat=vat,
             amount_gross=final_gross,

@@ -397,6 +397,11 @@ async def _check_fic_exists(
 ) -> PipelineResult | None:
     """Pre-verifica: se il documento esiste già su FIC, salta la creazione.
 
+    FIC NON supporta il filtro per ``description`` via query params.
+    Il match viene fatto **in memoria** su descrizione e numero documento.
+    Due documenti diversi dello stesso fornitore nella stessa data NON
+    vengono scambiati per duplicati.
+
     Restituisce un PipelineResult già completo se il documento è stato
     trovato, None se non esiste e si deve procedere con la creazione.
     """
@@ -407,6 +412,7 @@ async def _check_fic_exists(
             entity_id=expense.entity_id,
             description=expense.description,
             date=expense.date,
+            invoice_number=expense.invoice_number,
         )
     except Exception:
         return None  # fallback silenzioso: procedi con creazione

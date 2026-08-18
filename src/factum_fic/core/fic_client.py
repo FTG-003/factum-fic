@@ -156,15 +156,30 @@ class FICClient:
 
     @selective_retry
     async def search_supplier(self, name: str, vat_number: str | None = None) -> dict[str, Any] | None:
-        """Cerca un fornitore esistente per nome o partita IVA.
+        """Cerca un fornitore esistente per partita IVA o nome.
+
+        Ordine di ricerca:
+          1. Per partita IVA (se fornita)
+          2. Per nome (fallback)
 
         Returns:
-            Il primo fornitore matchato, o None.
+            Il primo fornitore matchato, o None se non trovato.
         """
-        params: dict[str, str] = {"field": "name", "query": name}
+        # 1. Cerca per partita IVA
         if vat_number:
-            params["field"] = "vat_number"
-            params["query"] = vat_number
+            params: dict[str, str] = {"field": "vat_number", "query": vat_number}
+            response = await self._client.get(
+                f"/c/{self._company_id}/entities/suppliers",
+                params=params,
+            )
+            response.raise_for_status()
+            data = response.json()
+            entities = data.get("data", [])
+            if entities:
+                return entities[0]
+
+        # 2. Fallback: cerca per nome
+        params = {"field": "name", "query": name}
         response = await self._client.get(
             f"/c/{self._company_id}/entities/suppliers",
             params=params,
@@ -182,29 +197,33 @@ class FICClient:
         entity_id: int | None = None,
         description: str | None = None,
         date: str | None = None,
+        invoice_number: str | None = None,
     ) -> dict[str, Any] | None:
-        """Cerca un documento di spesa esistente su FIC per descrizione e fornitore.
+        """Cerca un documento di spesa esistente su FIC con match client-side.
 
-        Usato per anti-duplicazione: se un documento con la stessa descrizione
-        e data esiste già (es. da un timeout/retry precedente), non lo ricrea.
+        FIC NON supporta il filtro per ``description`` via query params.
+        Per evitare falsi positivi (due documenti diversi dello stesso
+        fornitore nella stessa data), la funzione:
+
+        1. Interroga FIC per ``entity_id`` + ``date_from``/``date_to``
+        2. Filtra **in memoria** su descrizione E numero documento
+        3. Restituisce il match solo se descrizione O numero documento coincidono
 
         Args:
             entity_id: ID fornitore su FIC.
-            description: Descrizione del documento da cercare.
+            description: Descrizione del documento da cercare (match fuzzy).
             date: Data documento (YYYY-MM-DD).
+            invoice_number: Numero documento per match esatto.
 
         Returns:
-            Il primo documento matchato, o None.
+            Il documento matchato, o None se nessun match.
         """
-        params: dict[str, str] = {}
+        params: dict[str, str] = {"per_page": "50"}
         if entity_id:
             params["entity_id"] = str(entity_id)
-        if description:
-            params["description"] = description
         if date:
             params["date_from"] = date
             params["date_to"] = date
-        params["per_page"] = "5"
         response = await self._client.get(
             f"/c/{self._company_id}/received_documents",
             params=params,
@@ -214,12 +233,27 @@ class FICClient:
         docs = data.get("data", [])
         if not docs:
             return None
-        # Match esatto per descrizione (o primo risultato se descrizione non data)
-        if description and len(docs) > 1:
-            for doc in docs:
-                if doc.get("description") == description:
-                    return doc
-        return docs[0]
+
+        target_desc = (description or "").strip().lower()
+        target_num = (invoice_number or "").strip().lower()
+
+        # Se non abbiamo descrizione né numero, non possiamo matchare
+        if not target_desc and not target_num:
+            return None
+
+        for doc in docs:
+            doc_desc = (doc.get("description") or "").strip().lower()
+            doc_num = (doc.get("invoice_number") or doc.get("numero") or "").strip().lower()
+
+            # Match per descrizione (case-insensitive, containment)
+            if target_desc and target_desc in doc_desc:
+                return doc
+
+            # Match per numero documento
+            if target_num and (target_num == doc_num or target_num in doc_num):
+                return doc
+
+        return None
 
     # ── Recupero spesa per ID ────────────────────────────────────────────────
 
