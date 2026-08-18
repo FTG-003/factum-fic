@@ -1,140 +1,182 @@
-# ⚡ Factum-FIC
-
-> **Basta perdere 2 o 3 ore al mese con la burocrazia italiana.**
-> Automatizza la registrazione delle fatture passive e le autofatture estere su **Fatture in Cloud (FIC)** in un solo comando.
+<div align="center">
+  <img src=".github/assets/factum-FIC-github.png" alt="Factum-FIC" width="160"/>
+  <h1>Factum - Fatture in Cloude</h1>
+  <p><strong>Le tue fatture estere? Le registra Factum-FIC su Fatture in Cloud.<br>
+  Da sole. In 3 secondi. Zero abbonamenti.</strong></p>
+</div>
 
 <p align="center">
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/Licenza-AGPL--3.0-blue.svg?logo=gnu" alt="AGPL-3.0"></a>
   <a href="https://github.com/FTG-003/factum-fic/releases"><img src="https://img.shields.io/github/v/release/FTG-003/factum-fic?logo=git&logoColor=white" alt="Release"></a>
-  <br>
-  <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/badge/linted%20da-ruff-7aa2f7?logo=ruff&logoColor=white" alt="Ruff"></a>
-  <a href="https://img.shields.io/badge/XML%20SDI-100%25%20offline-73daca"><img src="https://img.shields.io/badge/XML%20SDI-100%25%20offline-73daca" alt="XML SDI offline"></a>
 </p>
 
 ---
 
-## 🎯 A cosa serve? (Spiegato semplice)
+## Il problema (te lo spiego semplice)
 
-Se hai una **Partita IVA (in particolare in Regime Forfettario)** e acquisti strumenti digitali dall'estero (es. **GitHub, Hetzner, AWS, OpenAI, Google Workspace, Canva, Notion**), ogni mese ti tocca la solita trafila:
+Hai una Partita IVA in Regime Forfettario. Ogni mese compri strumenti digitali dall'estero: **Hetzner, AWS, GitHub, OpenAI, Google Workspace, Canva, Notion**.
 
-1. Scaricare le ricevute e fatture in PDF dai vari siti.
-2. Capire quale codice contabile usare (**TD17 per Extra-UE**, **TD18 per beni Intra-UE**, **TD19 per servizi Intra-UE**).
-3. Calcolare il Reverse Charge (inversione contabile) a mano.
-4. Aprire **Fatture in Cloud (FIC)** e ricopiare a mano date, importi, cambi valuta e allegare i file uno per uno.
+Ogni fattura significa:
+1. Scaricare il PDF dal sito del fornitore
+2. Aprire Fatture in Cloud e ricopiare a mano data, importo, fornitore
+3. Capire se serve l'autofattura (TD17? TD18? TD19? Mah.)
+4. Calcolare il reverse charge senza sbagliare
+5. Compilare l'autofattura
+6. verificare e spedirere al Sistema di Interscambio SDI, gestito dall'Agenzia delle Entrate
+6. Ripetere per ogni fattura
 
-**Factum-FIC fa tutto questo al posto tuo in 3 secondi.**
-Trascini i file dentro una cartella sul tuo computer, lanci un comando e trovi tutto già compilato e registrato su Fatture in Cloud.
+**Ogni mese perdi 2-3 ore in questa trafila.**
 
----
-
-## 🎁 Quanto costa? (Zero abbonamenti a sorpresa)
-
-Trasparenza totale per chi fa impresa:
-
-| Tipo Documento | Cosa fa | Costo |
-|---|---|---|
-| **Fatture XML Italiane** (Aruba, PEC, fornitori IT) | Legge i file `.xml` e registra le spese su Fatture in Cloud. | **100% GRATIS e Illimitato** (elaborazione locale sul tuo PC, zero chiamate esterne). |
-| **Fatture PDF Estere** (Hetzner, AWS, OpenAI, Google, ecc.) | Converte il PDF non strutturato ed estrae il Reverse Charge corretto (TD17/TD18/TD19). | **10 PDF/MESE GRATIS per sempre** (Reset automatico il 1° di ogni mese). |
-| **Ricarica Pacchetto 100 PDF** | Se superi i 10 PDF al mese, acquisti crediti senza scadenza. | **€ 9,90 una tantum** (Zero canoni mensili, zero vincoli). |
-
-> 💡 **10 PDF al mese bastano?**
-> Per oltre l'80% dei freelance e forfettari, 10 conversioni al mese coprono l'intero stack mensile (Hosting + Dominio + AI + SaaS vari). Se stai avviando la tua attività, **non spenderai mai un solo euro**.
+Factum-FIC fa tutto da solo. Tu lasci i file in una cartella, lanci un comando, e lui registra tutto su Fatture in Cloud. Comprese le autofatture per i fornitori esteri.
 
 ---
 
-## 🚀 Guida Passo-Passo per Iniziare (in 3 Minuti)
+## Come funziona (in parole povere)
 
-Non serve essere programmatori. Apri il terminale del tuo computer (Terminale su Mac/Linux, PowerShell su Windows) e segui questi passaggi:
+```
+Tu lasci i file qui  →  Factum-FIC fa tutto  →  Su Fatture in Cloud trovi
+📥 da_elaborare/         da solo                ✅ spese registrate
+                                                     ✅ autofatture pronte
+                                                     ✅ allegati caricati
+```
 
-### 1. Installazione Rapida
+Se il file è **XML FatturaPA** (quello che arriva dallo SDI), Factum-FIC lo legge in locale, gratis, senza chiamare nessun server esterno. I tuoi dati non escono dal computer.
 
-Installa lo strumento direttamente senza clonare il codice:
+Se il file è **PDF** (fattura Hetzner, AWS, ecc.), Factum-FIC estrae il testo, lo manda in modo sicuro a Factum Parse per il parsing, e registra tutto su FIC. Solo il testo, mai il file originale.
+
+---
+
+## Quanto costa (trasparenza totale)
+
+| Cosa | Costo |
+|---|---|
+| **Fatture XML italiane** (Aruba, fornitori IT, SDI) | **€0 — gratis e illimitate**. Elaborazione 100% sul tuo computer. |
+| **Fatture PDF estere** (Hetzner, AWS, OpenAI, ecc.) | **10 al mese gratis per sempre**. Poi €9,90 per 100 PDF aggiuntivi (una tantum, senza scadenza). |
+
+> 💡 **10 PDF al mese bastano per oltre l'80% dei forfettari.** Hosting, dominio, AI, SaaS vari. Se stai iniziando, molto probabilmente non spenderai mai un centesimo.
+
+---
+
+## Come iniziare (in 3 minuti, senza essere programmatore)
+
+Apri il **Terminale** (Mac/Linux) o **PowerShell** (Windows).
+
+### 1. Installa
+
+Copia e incolla questo comando:
 
 ```bash
-# Se usi pipx (consigliato per avere il comando sempre disponibile):
 pipx install git+https://github.com/FTG-003/factum-fic
+```
 
-# Oppure se usi uv:
+Se ti dice "comando non trovato", prova con:
+
+```bash
 uv tool install git+https://github.com/FTG-003/factum-fic
 ```
 
-Se sei uno sviluppatore e preferisci partire dai sorgenti:
-
-```bash
-git clone https://github.com/FTG-003/factum-fic
-cd factum-fic
-uv sync
-```
-
-### 2. Configurazione Iniziale (Solo la prima volta)
-
-Lancia la procedura guidata:
+### 2. Configura (solo la prima volta)
 
 ```bash
 factum-fic setup
 ```
 
-La procedura ti guiderà in due passaggi:
+La procedura ti guida passo-passo:
+- **Token Fatture in Cloud**: lo generi dal tuo account FIC (Impostazioni → API → Personal Access Token)
+- **Chiave Factum**: si attiva da sola, gratis. 10 PDF al mese, collegati alla tua Partita IVA.
 
-1. **Token di Fatture in Cloud (FIC):**  
-   Vai su *Fatture in Cloud > Impostazioni > Strumenti > API / Moduli e App > Personal Access Token* e genera un token abilitando i permessi di lettura/scrittura per Acquisti/Spese e Documenti Emessi.
+### 3. Usalo tutti i mesi
 
-2. **Attivazione Gratuita Factum Engine:**  
-   Conferma con `Invio` (Sì) per collegare la tua Partita IVA e sbloccare istantaneamente i tuoi **10 PDF gratuiti al mese** (zero carte di credito richieste).
+Metti le fatture nella cartella `da_elaborare/`:
 
-### 3. Come si usa tutti i mesi (Il Flusso Quotidiano)
-
-Il programma crea automaticamente una cartella di lavoro sul tuo computer:
-
-```
-📂 factum-workspace/
-├── 📥 da_elaborare/   ← METTI QUI I TUOI FILE (PDF o XML)
-├── 📦 archiviate/     ← Qui finiscono i file registrati con successo
-└── ⚠️ da_verificare/  ← Qui finiscono solo i file illeggibili o corrotti
+```bash
+cp ~/Downloads/fattura_*.xml ./da_elaborare/
 ```
 
-**Passo 1 — Trascina i tuoi file:**  
-Inserisci le fatture PDF dei tuoi fornitori esteri o gli XML dei fornitori italiani dentro `da_elaborare/`.
-
-**Passo 2 — Lancia l'elaborazione:**
+Poi lancia:
 
 ```bash
 factum-fic elabora
 ```
 
-**Fatto!** Apri il tuo account di Fatture in Cloud: troverai le uscite registrate, i cambi valuta applicati e le autofatture (TD17/TD18/TD19) pronte.
+Apri Fatture in Cloud: le spese sono già registrate, le autofatture sono già pronte. Fatto.
 
 ---
 
-## 🛡️ Zero Rischi per il tuo Fisco (Trasparenza Totale)
+## Comandi principali (tutti in italiano)
 
-- **Nessun invio "alla cieca" allo SDI:** Il tool registra le spese contabili e predispone le registrazioni su Fatture in Cloud. Sei sempre tu a mantenere la supervisione finale.
-
-- **Privacy & GDPR:**
-  - I file XML vengono elaborati **al 100% offline** sul tuo computer: nessun dato delle fatture italiane esce dal tuo PC.
-  - I file PDF esteri vengono trasmessi solo come testo estratto via HTTPS per il parsing contabile e non vengono memorizzati a lungo termine né ceduti a terzi.
-  - Per attivare il free tier inviamo solo **P.IVA e Company ID** per associare i crediti gratuiti: non chiediamo carte di credito né dati sensibili.
-
----
-
-## 📋 Comandi Principali (Tutti in Italiano)
-
-| Comando | Alias | Cosa fa |
-|---|---|---|
-| `factum-fic elabora` | `auto`, `sync` | Elabora tutti i file in `da_elaborare/` e li carica su FIC. |
-| `factum-fic stato` | `status` | Mostra i crediti PDF residui, i file in coda e lo stato della connessione FIC. |
-| `factum-fic ricarica` | `buy-credits` | Apre il link sicuro Lemon Squeezy per acquistare 100 crediti PDF aggiuntivi (€9,90). |
-| `factum-fic watch` | `osserva` | Resta attivo in background ed elabora i file appena li trascini nella cartella. |
+| Comando | Cosa fa |
+|---|---|
+| `factum-fic setup` (`configura`) | Configurazione guidata (una volta sola) |
+| `factum-fic sync` (`elabora`) | Elabora tutti i file in `da_elaborare/` |
+| `factum-fic status` (`stato`) | Mostra quanti crediti PDF ti restano, lo stato della coda, la connessione FIC |
+| `factum-fic watch` (`auto`) | Resta in esecuzione ed elabora i file appena li trascini |
+| `factum-fic riprova-autofatture` | Recupera le autofatture che non erano riuscite |
+| `factum-fic ricarica` | Acquista 100 PDF extra (€9,90) |
 
 ---
 
-## 🤝 Supporto & Contributi
+## Come gestisce il reverse charge
 
-Hai trovato un formato PDF estero non riconosciuto o vuoi proporre un miglioramento?
+Quando compri da un fornitore estero, serve un'autofattura. Factum-FIC sceglie quella giusta in automatico:
 
-- [Apri una Issue](https://github.com/FTG-003/factum-fic/issues) su GitHub.
-- Consulta le linee guida di sviluppo in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+| Fornitore | Tipo autofattura |
+|---|---|
+| **Extra-UE** (USA, UK, Svizzera…) | **TD17** |
+| **Unione Europea** con Partita IVA (Germania, Francia…) | **TD18** |
+| **Unione Europea** senza Partita IVA | **TD19** |
+| Fornitore italiano | Spesa diretta (nessuna autofattura) |
 
-**Licenza:** [AGPL-3.0](LICENSE) — open source, copyleft.  
-Sviluppato per semplificare la vita alle Partite IVA italiane.
+> ⚠️ **Importante**: IVA = 0 non significa sempre reverse charge. Un fornitore italiano forfettario ha IVA = 0 ma non serve autofattura. Factum-FIC lo riconosce da solo.
+
+---
+
+## I tuoi dati sono al sicuro
+
+| Tipo file | Dove viene elaborato |
+|---|---|
+| **XML FatturaPA** | **100% sul tuo computer.** Mai trasmesso a nessuno. |
+| **PDF fattura** | Solo il **testo estratto** viene inviato via HTTPS. Mai il file originale. Mai memorizzato. |
+| **Fatture in Cloud** | Solo i dati contabili, tramite il tuo token personale. |
+
+Le credenziali stanno nel file `.env` (che è gitignorato, mai condiviso).
+
+---
+
+## Perché esiste Factum-FIC (e non uno scriptino)
+
+Se hai provato a scrivere uno script per automatizzare Fatture in Cloud, sai che:
+- Se lo lanci due volte, duplica le spese
+- Se FIC è giù, perdi tutto
+- Se l'autofattura fallisce, te ne accodi dopo un mese
+- Non hai idea di quali file siano stati elaborati e quali no
+
+Factum-FIC ha una **coda persistente** (SQLite) che tiene traccia di tutto: file già processati, errori, autofatture da ritentare, crediti rimanenti. Ogni file ha un'impronta digitale (SHA-256) così non viene mai elaborato due volte. Se qualcosa va storto, lo recuperi con un comando.
+
+---
+
+## Vuoi contribuire o hai bisogno di aiuto?
+
+- **Hai trovato un bug?** [Apri una issue](https://github.com/FTG-003/factum-fic/issues)
+- **Vuoi sviluppare?** Vedi [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- **Problemi di sicurezza?** Scrivi a info@pyragogy.org (vedi [`SECURITY.md`](SECURITY.md))
+
+---
+
+## Licenza
+
+**AGPL-3.0** — open source, copyleft.
+
+Puoi usarlo per la tua Partita IVA gratis, senza limiti. Puoi modificarlo. Se lo offri come servizio a terzi, devi rilasciare le modifiche.
+
+[Testo completo della licenza →](LICENSE)
+
+[Factum Parse API](https://factum.pyragogy.org) è un servizio SaaS separato (non coperto da AGPL).
+
+---
+
+<div align="center">
+  <sub>Fatto con ❤️ per chi ha una Partita IVA e ha di meglio da fare che ricopiare fatture a mano.<br>
+  Non è consulenza fiscale. Verifica sempre col tuo commercialista.</sub>
+</div>
