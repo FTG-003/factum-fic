@@ -9,6 +9,7 @@
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/Licenza-AGPL--3.0-blue.svg?logo=gnu" alt="AGPL-3.0"></a>
   <a href="https://github.com/FTG-003/factum-fic/releases"><img src="https://img.shields.io/github/v/release/FTG-003/factum-fic?logo=git&logoColor=white" alt="Release"></a>
+  <a href="#quanto-costa"><img src="https://img.shields.io/badge/10%20PDF%20mese-gratis-73daca?logo=openaccess&logoColor=white" alt="10 PDF gratis/mese"></a>
 </p>
 
 ---
@@ -123,6 +124,36 @@ factum-fic elabora
 ```
 
 Apri Fatture in Cloud: le spese sono già registrate, le autofatture sono già pronte. Fatto.
+
+---
+
+## Prova subito (anche senza fatture vere)
+
+Nel repository c'è tutto quello che ti serve per vedere Factum-FIC in azione con dati finti.
+
+### Scenario 1: fattura estera PDF
+
+Genera una fattura Hetzner finta (reverse charge, 2 pagine, realisticissima):
+
+```bash
+uv run python scripts/make_test_pdf.py da_elaborare/Hetzner-luglio.pdf
+factum-fic elabora
+```
+
+Factum-FIC la analizza, riconosce il fornitore tedesco, crea la spesa su FIC e prepara l'autofattura **TD18** (fornitore UE con Partita IVA).
+
+### Scenario 2: XML fornitore estero
+
+Il repository include già un XML FatturaPA di esempio:
+
+```bash
+cp tests/fixtures/sample_einvoice.xml da_elaborare/
+factum-fic elabora
+```
+
+Questa è una fattura DigitalOcean (USA) → Factum-FIC la parsaa in locale, registra la spesa e prepara l'autofattura **TD17** (extra-UE).
+
+> 💡 **Nessun credito consumato.** Lo scenario 2 è 100% locale e gratuito. Lo scenario 1 consuma 1 dei tuoi 10 PDF gratis mensili.
 
 ---
 
