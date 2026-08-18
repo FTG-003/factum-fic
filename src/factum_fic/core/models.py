@@ -65,6 +65,22 @@ class SelfInvoiceType(StrEnum):
 # ── Eccezioni personalizzate ─────────────────────────────────────────────────
 
 
+class FactumAuthError(Exception):
+    """Sollevata quando Factum API restituisce 401/403 (credenziali non valide)."""
+
+
+class FactumQuotaExceededError(Exception):
+    """Sollevata quando Factum API restituisce 429 (crediti esauriti)."""
+
+
+class FactumParsingError(Exception):
+    """Sollevata per errori permanenti di parsing (HTTP 422) o testo non estraibile."""
+
+
+class FactumNetworkError(Exception):
+    """Sollevata per errori transitori di rete o server (timeout, 5xx)."""
+
+
 class CurrencyConversionError(Exception):
     """Sollevata quando la conversione valuta fallisce in modalità strict.
 

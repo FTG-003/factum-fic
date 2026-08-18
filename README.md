@@ -203,6 +203,9 @@ uv sync --all-extras --dev
 - Nessun dato fiscale viene mai condiviso con terze parti
 - Le API key sono in `.env` (gitignorato)
 - Factum Parse non conserva il testo dopo la risposta (zero-retention)
+- All'attivazione, la Factum API Key trasmette solo P.IVA e Company ID per
+  associare il pool gratuito di 10 crediti mensili. Nessun dato fiscale viene
+  trasmesso in questa fase.
 
 ---
 

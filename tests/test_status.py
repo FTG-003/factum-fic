@@ -131,6 +131,9 @@ def test_collect_status_api_down(queue: QueueStore) -> None:
         "errors": 0,
         "queued": 0,
         "pending_si": 0,
+        "auth_errors": 0,
+        "quota_exceeded": 0,
+        "network_delays": 0,
     }
 
 

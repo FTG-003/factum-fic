@@ -34,7 +34,11 @@ from factum_fic.core.mapper import Mapper
 from factum_fic.core.models import (
     CurrencyConversionError,
     DocumentStatus,
+    FactumAuthError,
+    FactumNetworkError,
     FactumParseResult,
+    FactumParsingError,
+    FactumQuotaExceededError,
     FactumResponse,
     FileEvent,
     PipelineResult,
@@ -543,8 +547,10 @@ async def process_file(
             size_bytes=path.stat().st_size,
         )
 
-        # Deduplicazione -- solo i completati bloccano
-        if not force and queue.exists(sha):
+        # Deduplicazione — solo gli stati terminali bloccano.
+        # Stati non-terminali (QUOTA_EXCEEDED, NETWORK_DELAY, queued,
+        # processing) bypassano la deduplica e vengono rielaborati.
+        if not force and not queue.should_retry(sha):
             logger.info("File gia' processato (SHA-256 match): %s", path.name)
             result = PipelineResult(
                 file=file_event,
@@ -631,8 +637,73 @@ async def process_file(
 
         # Chiamata Factum
         try:
-            logger.info("TESTO INVIATO A FACTUM (%d caratteri):\n%s", len(text), text[:2000])
+            logger.info(
+                "TESTO INVIATO A FACTUM (%d caratteri):\n%s",
+                len(text), text[:2000],
+            )
             factum_resp = await factum.parse_text(text)
+
+        except FactumAuthError as exc:
+            # Errore critico: credenziali non valide → blocca tutti i PDF
+            logger.critical(
+                "Chiave API Factum non valida o revocata. Elaborazione PDF sospesa."
+            )
+            queue.mark_auth_error(sha, str(exc), path=str(path))
+            try:
+                archive_failed_file(path, base_dir)
+            except Exception as exc2:
+                logger.warning("Fallito spostamento per auth error: %s", exc2)
+            return PipelineResult(
+                file=file_event,
+                status=DocumentStatus.FAILED,
+                factum_status="auth_error",
+                factum_error=str(exc),
+            )
+
+        except FactumQuotaExceededError as exc:
+            # Crediti esauriti → stato non-terminale, file resta in da_elaborare
+            logger.warning("Quota Factum esaurita per %s: %s", path.name, exc)
+            queue.mark_quota_exceeded(sha, str(exc), path=str(path))
+            return PipelineResult(
+                file=file_event,
+                status=DocumentStatus.PENDING,
+                factum_status="quota_exceeded",
+                factum_error=str(exc),
+            )
+
+        except FactumNetworkError as exc:
+            # Errore transitorio di rete/server → stato non-terminale
+            logger.warning(
+                "Errore di rete/server Factum per %s: %s. "
+                "Il file rimane in da_elaborare per il prossimo ciclo.",
+                path.name, exc,
+            )
+            queue.mark_network_delay(sha, str(exc), path=str(path))
+            return PipelineResult(
+                file=file_event,
+                status=DocumentStatus.PENDING,
+                factum_status="network_delay",
+                factum_error=str(exc),
+            )
+
+        except FactumParsingError as exc:
+            # Errore permanente di parsing → file in da_verificare
+            logger.warning(
+                "Parsing Factum fallito per %s (errore permanente): %s",
+                path.name, exc,
+            )
+            queue.mark_failed(sha, str(exc))
+            try:
+                archive_failed_file(path, base_dir)
+            except Exception as exc2:
+                logger.warning("Fallito spostamento errore parsing: %s", exc2)
+            return PipelineResult(
+                file=file_event,
+                status=DocumentStatus.FAILED,
+                factum_status="parsing_error",
+                factum_error=str(exc),
+            )
+
         except Exception as exc:
             logger.exception("Factum parsing fallito per %s", path.name)
             pipeline_result = PipelineResult(

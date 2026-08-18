@@ -100,6 +100,20 @@ factum-fic configura
 cp .env.example .env
 ```
 
+### Permessi minimi del token FIC
+
+Per generare il Personal Access Token su Fatture in Cloud, assicurati di
+abilitare almeno questi permessi:
+
+| Area | Permesso | Necessario per |
+|---|---|---|
+| **Acquisti / Spese** | Lettura e Scrittura | Creare e allegare spese |
+| **Documenti Emessi** | Lettura e Scrittura | Generare autofatture TD17/18/19 |
+| **Impostazioni / Azienda** | Sola Lettura | Rilevare P.IVA e regime fiscale |
+
+> ⚠️ **Senza i permessi di scrittura su "Documenti Emessi", le autofatture
+> per fornitori esteri (reverse charge) non possono essere generate.**
+
 ### Utilizzo base
 
 ```bash

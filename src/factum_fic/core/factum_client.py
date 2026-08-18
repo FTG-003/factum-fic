@@ -9,7 +9,13 @@ from typing import Any
 import httpx
 
 from factum_fic.config import Settings
-from factum_fic.core.models import FactumResponse
+from factum_fic.core.models import (
+    FactumAuthError,
+    FactumNetworkError,
+    FactumParsingError,
+    FactumQuotaExceededError,
+    FactumResponse,
+)
 from factum_fic.core.retry_policy import selective_retry
 
 _HEADERS = {"User-Agent": "factum-fic/0.1.0"}
@@ -58,20 +64,46 @@ class FactumClient:
     async def parse_text(self, text: str, doc_type: str = "auto") -> FactumResponse:
         """Invia un testo a /v1/parse e restituisce il risultato.
 
-        Raises:
-            httpx.HTTPStatusError: 4xx fallisce subito (nessun retry).
-                Per 429 (rate limit), il messaggio contiene il testo amichevole.
-            httpx.TimeoutException | httpx.ConnectError: retry 3x con backoff.
+        Gestisce gli errori HTTP in modo granulare:
+        - 401/403 → FactumAuthError (credenziali non valide)
+        - 422     → FactumParsingError (errore permanente di parsing)
+        - 429     → FactumQuotaExceededError (crediti esauriti)
+        - 5xx     → FactumNetworkError (errore transitorio server)
+        - Timeout/Connessione → FactumNetworkError (rete assente)
         """
         payload: dict[str, Any] = {"text": text, "doc_type": doc_type}
-        response = await self._client.post("/v1/parse", json=payload)
-        # Gestione 429 con messaggio amichevole prima del raise
-        if response.status_code == 429:
-            raise httpx.HTTPStatusError(
-                _RATE_LIMIT_MSG,
-                request=response.request,
-                response=response,
+        try:
+            response = await self._client.post("/v1/parse", json=payload)
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as exc:
+            raise FactumNetworkError(
+                f"Errore di rete durante la chiamata Factum: {exc}"
+            ) from exc
+
+        # 401/403 → credenziali non valide
+        if response.status_code in (401, 403):
+            raise FactumAuthError(
+                "Chiave API Factum non valida o revocata. "
+                "Elaborazione PDF sospesa."
             )
+
+        # 422 → errore permanente di parsing (testo non elaborabile)
+        if response.status_code == 422:
+            body = response.text[:500]
+            raise FactumParsingError(
+                f"Factum non ha potuto elaborare il testo (HTTP 422): {body}"
+            )
+
+        # 429 → crediti esauriti
+        if response.status_code == 429:
+            raise FactumQuotaExceededError(_RATE_LIMIT_MSG)
+
+        # 5xx → errore transitorio del server
+        if 500 <= response.status_code < 600:
+            raise FactumNetworkError(
+                f"Errore server Factum (HTTP {response.status_code}): "
+                f"{response.text[:300]}"
+            )
+
         response.raise_for_status()
         data = response.json()
         logger.info("--- RAW FACTUM RESPONSE ---\n%s\n---------------------------", response.text)

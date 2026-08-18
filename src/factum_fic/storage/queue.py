@@ -28,6 +28,13 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+# Stati non-terminali: un file in questi stati PUÒ essere rielaborato
+# al ciclo successivo (bypassa la deduplicazione SHA-256).
+_NON_TERMINAL_STATES = {"queued", "processing", "QUOTA_EXCEEDED", "NETWORK_DELAY"}
+
+# Stati terminali: un file in questi stati NON viene rielaborato.
+_TERMINAL_STATES = {"completed", "failed", "SELF_INVOICE_PENDING", "AUTH_ERROR"}
+
 _QUEUE_DB = Path.home() / ".factum-fic" / "queue.db"
 
 
@@ -172,13 +179,125 @@ class QueueStore:
             for row in cur.fetchall()
         ]
 
+    # ── Gestione stati non-terminali (retry automatico) ──────────────────
+
+    def mark_auth_error(
+        self,
+        sha256: str,
+        error_message: str | None = None,
+        *,
+        path: str | None = None,
+    ) -> None:
+        """Marca un item come AUTH_ERROR (credenziali Factum non valide).
+
+        Stato terminale: il file NON viene rielaborato automaticamente.
+        L'utente deve aggiornare la API key e rimuovere manualmente
+        il file da ``da_verificare/``.
+        """
+        self._conn.execute(
+            "INSERT INTO queue (sha256, file_path, status, error_message, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, 'AUTH_ERROR', ?, "
+            "datetime('now'), datetime('now')) "
+            "ON CONFLICT(sha256) DO UPDATE SET "
+            "status='AUTH_ERROR', "
+            "error_message=excluded.error_message, "
+            "updated_at=datetime('now')",
+            (sha256, path or "", error_message),
+        )
+        self._conn.commit()
+
+    def mark_quota_exceeded(
+        self,
+        sha256: str,
+        error_message: str | None = None,
+        *,
+        path: str | None = None,
+    ) -> None:
+        """Marca un item come QUOTA_EXCEEDED (crediti Factum esauriti).
+
+        Stato non-terminale: il file PUÒ essere rielaborato al ciclo
+        successivo (bypassa la deduplicazione SHA-256). Il file resta
+        in ``da_elaborare/``.
+        """
+        self._conn.execute(
+            "INSERT INTO queue (sha256, file_path, status, error_message, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, 'QUOTA_EXCEEDED', ?, "
+            "datetime('now'), datetime('now')) "
+            "ON CONFLICT(sha256) DO UPDATE SET "
+            "status='QUOTA_EXCEEDED', "
+            "error_message=excluded.error_message, "
+            "updated_at=datetime('now')",
+            (sha256, path or "", error_message),
+        )
+        self._conn.commit()
+
+    def mark_network_delay(
+        self,
+        sha256: str,
+        error_message: str | None = None,
+        *,
+        path: str | None = None,
+    ) -> None:
+        """Marca un item come NETWORK_DELAY (errore transitorio di rete).
+
+        Stato non-terminale: il file PUÒ essere rielaborato al ciclo
+        successivo (bypassa la deduplicazione SHA-256). Il file resta
+        in ``da_elaborare/``.
+        """
+        self._conn.execute(
+            "INSERT INTO queue (sha256, file_path, status, error_message, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, 'NETWORK_DELAY', ?, "
+            "datetime('now'), datetime('now')) "
+            "ON CONFLICT(sha256) DO UPDATE SET "
+            "status='NETWORK_DELAY', "
+            "error_message=excluded.error_message, "
+            "updated_at=datetime('now')",
+            (sha256, path or "", error_message),
+        )
+        self._conn.commit()
+
+    def should_retry(self, sha256: str) -> bool:
+        """Verifica se un file può essere rielaborato.
+
+        Restituisce True se il file NON è in uno stato terminale
+        (completed, failed, SELF_INVOICE_PENDING, AUTH_ERROR) oppure
+        se non esiste ancora nel database.
+
+        Questo metodo sostituisce ``exists()`` per la logica di
+        deduplicazione SHA-256: i file in stato non-terminale
+        (QUOTA_EXCEEDED, NETWORK_DELAY, queued, processing) NON
+        bloccano la rielaborazione.
+
+        Args:
+            sha256: Hash SHA-256 del file.
+
+        Returns:
+            True se il file può essere rielaborato, False se è in
+            uno stato terminale e non va toccato.
+        """
+        cur = self._conn.execute(
+            "SELECT status FROM queue WHERE sha256 = ?",
+            (sha256,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return True  # non esiste → può essere elaborato
+        status = row[0]
+        return status in _NON_TERMINAL_STATES
+
     # ── Query base ──────────────────────────────────────────────────────
 
     def exists(self, sha256: str) -> bool:
         """Verifica se un file (per hash) è già stato processato con successo.
 
         Solo gli item con status='completed' contano: i tentativi falliti
-        (queued/failed) NON bloccano un nuovo tentativo.
+        e gli stati non-terminali NON bloccano un nuovo tentativo.
+
+        Nota: per la logica di deduplicazione SHA-256 che considera anche
+        gli stati non-terminali, usare ``should_retry()``.
         """
         cur = self._conn.execute(
             "SELECT 1 FROM queue WHERE sha256 = ? AND status = 'completed'",
@@ -337,6 +456,9 @@ class QueueStore:
             - errors: item falliti in coda
             - queued: item in attesa
             - pending_si: item in attesa retry autofattura
+            - auth_errors: item bloccati per credenziali non valide
+            - quota_exceeded: item in attesa ripristino crediti
+            - network_delays: item in attesa di rete/server
         """
         def _count(sql: str) -> int:
             row = self._conn.execute(sql).fetchone()
@@ -354,6 +476,15 @@ class QueueStore:
             "queued": _count("SELECT COUNT(*) FROM queue WHERE status = 'queued'"),
             "pending_si": _count(
                 "SELECT COUNT(*) FROM queue WHERE status = 'SELF_INVOICE_PENDING'"
+            ),
+            "auth_errors": _count(
+                "SELECT COUNT(*) FROM queue WHERE status = 'AUTH_ERROR'"
+            ),
+            "quota_exceeded": _count(
+                "SELECT COUNT(*) FROM queue WHERE status = 'QUOTA_EXCEEDED'"
+            ),
+            "network_delays": _count(
+                "SELECT COUNT(*) FROM queue WHERE status = 'NETWORK_DELAY'"
             ),
         }
 

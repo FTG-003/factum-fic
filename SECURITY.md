@@ -80,4 +80,19 @@ La seguente sezione descrive come vengono trattati i tuoi dati.
    solo metadati di elaborazione.
 3. **Revoca il token FIC** dalla dashboard FIC se smetti di usare factum-fic.
 
+### Attivazione della Factum API Key
+
+Alla prima configurazione, Factum FIC invia al backend Factum Parse
+unicamente i seguenti dati:
+
+- **Partita IVA** dell'azienda configurata
+- **Company ID** dell'azienda su Fatture in Cloud
+
+Questi dati vengono trasmessi esclusivamente per associare in modo univoco
+il pool gratuito di **10 crediti mensili per Partita IVA** e prevenire abusi
+(es. email usa-e-getta per rigenerare chiavi).
+
+**Nessun altro dato aziendale** (fatture, nominativi clienti, importi, conti
+correnti) viene trasmesso in questa fase.
+
 Per domande sulla privacy, scrivi a **info@pyragogy.org**.

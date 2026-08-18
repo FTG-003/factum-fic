@@ -425,3 +425,338 @@ class TestSelfInvoicePendingQueue:
         pending = queue.get_pending_self_invoices()
         assert len(pending) == 1
         assert pending[0]["fic_expense_id"] == 600
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5. Stati non-terminali e rete — NETWORK_DELAY, QUOTA_EXCEEDED, AUTH_ERROR
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _mock_factum_transport_500() -> httpx.MockTransport:
+    """Factum restituisce HTTP 500 (errore server)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/parse" and request.method == "POST":
+            return httpx.Response(500, json={"error": "Internal server error"})
+        return httpx.Response(404)
+
+    return httpx.MockTransport(handler)
+
+
+def _mock_factum_transport_429() -> httpx.MockTransport:
+    """Factum restituisce HTTP 429 (quota esaurita)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/parse" and request.method == "POST":
+            return httpx.Response(429, json={"error": "Rate limit exceeded"})
+        return httpx.Response(404)
+
+    return httpx.MockTransport(handler)
+
+
+def _mock_factum_transport_401() -> httpx.MockTransport:
+    """Factum restituisce HTTP 401 (credenziali non valide)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/parse" and request.method == "POST":
+            return httpx.Response(401, json={"error": "Unauthorized"})
+        return httpx.Response(404)
+
+    return httpx.MockTransport(handler)
+
+
+def _mock_factum_transport_ok() -> httpx.MockTransport:
+    """Factum risponde OK per test di ripescaggio."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/parse" and request.method == "POST":
+            return httpx.Response(
+                200,
+                json={
+                    "job_id": "mock-job-002",
+                    "status": "done",
+                    "document_type": "invoice",
+                    "result": {
+                        "document_type": "invoice",
+                        "currency": "EUR",
+                        "total": 15.69,
+                        "supplier_name": "Hetzner Online GmbH",
+                        "supplier_vat": "DE812871812",
+                        "supplier_country": "DE",
+                        "supplier_address": "Nuremberg, Germany",
+                        "invoice_date": "2026-07-02",
+                        "invoice_number": "087001028658",
+                    },
+                },
+            )
+        return httpx.Response(404)
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.fixture
+def mock_factum_500(mock_settings: Settings) -> FactumClient:
+    client = FactumClient(mock_settings)
+    client._client = httpx.AsyncClient(
+        base_url="https://mock.factum.test",
+        transport=_mock_factum_transport_500(),
+    )
+    return client
+
+
+@pytest.fixture
+def mock_factum_429(mock_settings: Settings) -> FactumClient:
+    client = FactumClient(mock_settings)
+    client._client = httpx.AsyncClient(
+        base_url="https://mock.factum.test",
+        transport=_mock_factum_transport_429(),
+    )
+    return client
+
+
+@pytest.fixture
+
+def mock_factum_401(mock_settings: Settings) -> FactumClient:
+    client = FactumClient(mock_settings)
+    client._client = httpx.AsyncClient(
+        base_url="https://mock.factum.test",
+        transport=_mock_factum_transport_401(),
+    )
+    return client
+
+
+@pytest.fixture
+def mock_factum_ok_retry(mock_settings: Settings) -> FactumClient:
+    client = FactumClient(mock_settings)
+    client._client = httpx.AsyncClient(
+        base_url="https://mock.factum.test",
+        transport=_mock_factum_transport_ok(),
+    )
+    return client
+
+
+@pytest.fixture
+def mock_fic_ok_retry(mock_settings: Settings) -> FICClient:
+    """FIC OK per test di ripescaggio."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/user/info" and request.method == "GET":
+            return httpx.Response(200, json={"data": {"id": 1}})
+        if request.url.path.endswith("/entities/suppliers") and request.method == "GET":
+            return httpx.Response(
+                200, json={"data": [{"id": 42, "name": "Hetzner Online GmbH"}]},
+            )
+        if request.url.path.endswith("/received_documents") and request.method == "POST":
+            return httpx.Response(
+                201, json={"data": {"id": 777, "type": "expense"}},
+            )
+        if request.url.path.endswith("/issued_documents") and request.method == "POST":
+            return httpx.Response(
+                201, json={"data": {"id": 888, "type": "self_supplier_invoice"}},
+            )
+        if request.url.path.endswith("/payment_accounts") and request.method == "GET":
+            return httpx.Response(200, json={"data": []})
+        return httpx.Response(404)
+
+    client = FICClient(mock_settings)
+    client._client = httpx.AsyncClient(
+        base_url="https://mock.fic.test",
+        transport=httpx.MockTransport(handler),
+    )
+    return client
+
+
+class TestNetworkAndAuthErrors:
+    """Test errori di rete, auth, e bypass deduplicazione."""
+
+    @pytest.mark.asyncio
+    async def test_http_500_network_delay(
+        self,
+        mock_factum_500: FactumClient,
+        mock_fic_si_fail: FICClient,
+        mapper: Mapper,
+        queue: QueueStore,
+        mock_settings: Settings,
+        tmp_path: Path,
+    ) -> None:
+        """HTTP 500 Factum → NETWORK_DELAY, file resta in da_elaborare."""
+        src = _FIXTURES / "sample_saas_invoice.txt"
+        path = tmp_path / "test_500.txt"
+        shutil.copy2(src, path)
+
+        result = await process_file(
+            path,
+            factum=mock_factum_500,
+            fic=mock_fic_si_fail,
+            mapper=mapper,
+            queue=queue,
+            settings=mock_settings,
+        )
+
+        assert result.status == DocumentStatus.PENDING
+        assert result.factum_status == "network_delay"
+
+        # Il file NON viene spostato — resta in da_elaborare
+        assert path.exists() is True
+
+        # Record in coda con stato NETWORK_DELAY
+        record = queue.get(result.file.sha256)
+        assert record is not None
+        assert record["status"] == "NETWORK_DELAY"
+
+    @pytest.mark.asyncio
+    async def test_http_429_quota_exceeded(
+        self,
+        mock_factum_429: FactumClient,
+        mock_fic_si_fail: FICClient,
+        mapper: Mapper,
+        queue: QueueStore,
+        mock_settings: Settings,
+        tmp_path: Path,
+    ) -> None:
+        """HTTP 429 Factum → QUOTA_EXCEEDED, file resta in da_elaborare."""
+        src = _FIXTURES / "sample_saas_invoice.txt"
+        path = tmp_path / "test_429.txt"
+        shutil.copy2(src, path)
+
+        result = await process_file(
+            path,
+            factum=mock_factum_429,
+            fic=mock_fic_si_fail,
+            mapper=mapper,
+            queue=queue,
+            settings=mock_settings,
+        )
+
+        assert result.status == DocumentStatus.PENDING
+        assert result.factum_status == "quota_exceeded"
+        assert path.exists() is True
+
+        record = queue.get(result.file.sha256)
+        assert record is not None
+        assert record["status"] == "QUOTA_EXCEEDED"
+
+    @pytest.mark.asyncio
+    async def test_http_401_auth_error(
+        self,
+        mock_factum_401: FactumClient,
+        mock_fic_si_fail: FICClient,
+        mapper: Mapper,
+        queue: QueueStore,
+        mock_settings: Settings,
+        tmp_path: Path,
+    ) -> None:
+        """HTTP 401 Factum → FAILED, file spostato in da_verificare."""
+        src = _FIXTURES / "sample_saas_invoice.txt"
+        path = tmp_path / "test_401.txt"
+        shutil.copy2(src, path)
+
+        result = await process_file(
+            path,
+            factum=mock_factum_401,
+            fic=mock_fic_si_fail,
+            mapper=mapper,
+            queue=queue,
+            settings=mock_settings,
+        )
+
+        assert result.status == DocumentStatus.FAILED
+        assert result.factum_status == "auth_error"
+
+        # File spostato in da_verificare/
+        assert path.exists() is False
+
+    @pytest.mark.asyncio
+    async def test_should_retry_non_terminal(
+        self,
+        queue: QueueStore,
+    ) -> None:
+        """should_retry=True per QUOTA_EXCEEDED e NETWORK_DELAY."""
+        queue.mark_quota_exceeded("q1", "quota", path="/tmp/q1.pdf")
+        queue.mark_network_delay("n1", "network", path="/tmp/n1.pdf")
+
+        assert queue.should_retry("q1") is True
+        assert queue.should_retry("n1") is True
+
+    @pytest.mark.asyncio
+    async def test_should_not_retry_terminal(
+        self,
+        queue: QueueStore,
+    ) -> None:
+        """should_retry=False per completed, failed, AUTH_ERROR."""
+        queue.complete("c1", expense_id=1)
+        queue.mark_failed("f1", "error")
+        queue.mark_auth_error("a1", "auth", path="/tmp/a1.pdf")
+
+        assert queue.should_retry("c1") is False
+        assert queue.should_retry("f1") is False
+        assert queue.should_retry("a1") is False
+
+    @pytest.mark.asyncio
+    async def test_should_retry_nonexistent(self, queue: QueueStore) -> None:
+        """should_retry=True per record inesistente."""
+        assert queue.should_retry("nonexistent") is True
+
+    @pytest.mark.asyncio
+    async def test_sha256_bypass_quota_exceeded(
+        self,
+        mock_factum_ok_retry: FactumClient,
+        mock_fic_ok_retry: FICClient,
+        mapper: Mapper,
+        queue: QueueStore,
+        mock_settings: Settings,
+        tmp_path: Path,
+    ) -> None:
+        """File in QUOTA_EXCEEDED bypassa la deduplica e viene rielaborato."""
+        src = _FIXTURES / "sample_saas_invoice.txt"
+        path = tmp_path / "test_bypass_quota.txt"
+        shutil.copy2(src, path)
+
+        # Pre-marca come QUOTA_EXCEEDED con l'hash reale del file
+        real_sha = "907f48e0941d05631ba384dcd5df120832b3d59ce9665e825224898e09e3d4ae"
+        queue.mark_quota_exceeded(real_sha, "quota", path=str(path))
+
+        # Ora processa — should_retry deve restituire True e bypassare
+        result = await process_file(
+            path,
+            factum=mock_factum_ok_retry,
+            fic=mock_fic_ok_retry,
+            mapper=mapper,
+            queue=queue,
+            settings=mock_settings,
+        )
+
+        assert result.status == DocumentStatus.RECORDED
+        assert result.fic_id is not None
+
+    @pytest.mark.asyncio
+    async def test_sha256_bypass_network_delay(
+        self,
+        mock_factum_ok_retry: FactumClient,
+        mock_fic_ok_retry: FICClient,
+        mapper: Mapper,
+        queue: QueueStore,
+        mock_settings: Settings,
+        tmp_path: Path,
+    ) -> None:
+        """File in NETWORK_DELAY bypassa la deduplica e viene rielaborato."""
+        src = _FIXTURES / "sample_saas_invoice.txt"
+        path = tmp_path / "test_bypass_network.txt"
+        shutil.copy2(src, path)
+
+        # Pre-marca come NETWORK_DELAY con l'hash reale del file
+        real_sha = "907f48e0941d05631ba384dcd5df120832b3d59ce9665e825224898e09e3d4ae"
+        queue.mark_network_delay(real_sha, "network", path=str(path))
+
+        # Ora processa — should_retry deve restituire True e bypassare
+        result = await process_file(
+            path,
+            factum=mock_factum_ok_retry,
+            fic=mock_fic_ok_retry,
+            mapper=mapper,
+            queue=queue,
+            settings=mock_settings,
+        )
+
+        assert result.status == DocumentStatus.RECORDED
+        assert result.fic_id is not None

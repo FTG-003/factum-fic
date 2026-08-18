@@ -21,6 +21,20 @@ from factum_fic.config import Settings
 from factum_fic.core.factum_client import FactumClient
 from factum_fic.core.fic_client import FICClient
 
+# ── Permessi minimi richiesti per il token FIC ───────────────────────────────
+
+_FIC_TOKEN_PERMISSIONS = Panel(
+    "[bold yellow]Permessi necessari per il Personal Access Token[/]\n"
+    "\n"
+    "  1. [cyan]Acquisti / Spese[/] → [green]Lettura e Scrittura[/]  (obbligatorio)\n"
+    "  2. [cyan]Documenti Emessi[/] → [green]Lettura e Scrittura[/]  (obbligatorio per autofatture TD17/18/19)\n"
+    "  3. [cyan]Impostazioni / Azienda[/] → [yellow]Sola Lettura[/]  (per rilevare P.IVA e regime fiscale)\n"
+    "\n"
+    "[dim]Vai su: fattureincloud.it › Impostazioni › Sicurezza › API Key[/]",
+    title="🔑 Token FIC",
+    border_style="yellow",
+)
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
@@ -82,9 +96,8 @@ async def _run_setup(settings: Settings) -> None:
 
     # ── Step 1 — FIC credentials ────────────────────────────────────────
     console.print("[bold]Passo 1/3  —  Credenziali Fatture in Cloud[/]")
-    console.print(
-        "  [dim]Le trovi su: fattureincloud.it › Impostazioni › Sicurezza › API Key[/]"
-    )
+    console.print(_FIC_TOKEN_PERMISSIONS)
+    console.print()
     fic_api_key = Prompt.ask(
         "  API Key FIC",
         default=env_current.get("FIC_API_KEY", ""),
