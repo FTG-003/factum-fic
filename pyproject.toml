@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "factum-fic"
-version = "0.2.0"
+version = "0.1.0"
 description = "Daemon CLI + folder watcher per registrazione automatica fatture su Fatture in Cloud tramite Factum Parse API"
 readme = "README.md"
 requires-python = ">=3.12"
