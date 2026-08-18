@@ -46,6 +46,7 @@ class QueueStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self._db_path))
         self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._ensure_schema()
 
     # ── Schema & migrazioni ──────────────────────────────────────────────
