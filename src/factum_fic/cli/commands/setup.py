@@ -205,86 +205,79 @@ async def _run_setup(settings: Settings) -> None:
     finally:
         await temp_fic2.close()
 
-    # ── Step 2 (opzionale) — Auto-claim chiave Factum ──────────────────
+    # ── Step 2 — Auto-claim chiave Factum (automatico) ──────────────
     console.print()
     console.print("[bold]Passo 2/4  —  Attivazione chiave Factum Parse (gratuita)[/]")
     console.print(
         "  [dim]10 conversioni PDF/mese gratis, collegate alla tua P.IVA.[/]"
     )
 
-    do_claim = Confirm.ask(
-        "  Vuoi attivare la chiave Factum Parse?",
-        default=True,
-    )
     factum_api_key = ""
+    factum_key_is_existing = False
 
-    if do_claim:
-        piva = (info.get("vat_number") or "").strip()
-        cf = (info.get("fiscal_code") or "").strip()
-        print_info(f"  Verifica server-side in corso per {piva or cf}…")
+    piva = (info.get("vat_number") or "").strip()
+    cf = (info.get("fiscal_code") or "").strip()
 
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                claim_payload: dict[str, str | None] = {
-                    "fic_token": fic_token,
-                    "fic_company_id": fic_company_id,
-                }
-                if piva:
-                    claim_payload["vat_number"] = piva
-                if cf:
-                    claim_payload["fiscal_code"] = cf
-                resp = await client.post(
-                    f"{settings.factum_api_url}/api/v1/auth/claim",
-                    json=claim_payload,
-                )
-            if resp.status_code == 200:
-                data = resp.json()
-                factum_api_key = (data.get("api_key") or "").strip()
-                if factum_api_key:
+    print_info(f"  Verifica server-side in corso per {piva or cf}…")
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            claim_payload: dict[str, str | None] = {
+                "fic_token": fic_token,
+                "fic_company_id": fic_company_id,
+            }
+            if piva:
+                claim_payload["vat_number"] = piva
+            if cf:
+                claim_payload["fiscal_code"] = cf
+            resp = await client.post(
+                f"{settings.factum_api_url}/api/v1/auth/claim",
+                json=claim_payload,
+            )
+        if resp.status_code == 200:
+            data = resp.json()
+            factum_api_key = (data.get("api_key") or "").strip()
+            is_existing = data.get("is_existing", False)
+            factum_key_is_existing = is_existing
+            credits = data.get("free_remaining", 10)
+
+            if factum_api_key:
+                if is_existing:
                     print_ok(
-                        f"Chiave Factum Parse attivata con successo "
-                        f"(10 PDF/mese gratuiti collegati a {piva or cf})"
+                        f"Chiave Factum Parse recuperata dal profilo: "
+                        f"[bold]{factum_api_key[:12]}…[/] "
+                        f"(Crediti: {credits}/10)"
                     )
                 else:
-                    print_warning(
-                        "Claim completato ma chiave vuota. "
-                        "Inseriscila manualmente."
+                    print_ok(
+                        f"Nuova chiave Factum Parse Free Tier attivata: "
+                        f"[bold]{factum_api_key[:12]}…[/] "
+                        f"({credits} conversioni PDF/mese)"
                     )
-            elif resp.status_code == 409:
-                data = resp.json()
-                factum_api_key = (data.get("api_key") or "").strip()
-                if factum_api_key:
-                    print_ok("Chiave già attiva per questa P.IVA — recuperata.")
-                else:
-                    piva_reuse = (data.get("piva") or "").strip()
-                    if piva_reuse and piva_reuse != piva:
-                        print_warning(
-                            f"Il token FIC è già associato a P.IVA {piva_reuse}. "
-                            "Serve una chiave separata. Contatta info@pyragogy.org."
-                        )
-                    else:
-                        print_warning(
-                            "Chiave già reclamata. Se l'hai smarrita, "
-                            "contatta info@pyragogy.org per un reset."
-                        )
-            elif resp.status_code == 403:
-                print_error(
-                    "Token FIC non valido o permessi insufficienti. "
-                    "Verifica che il token FIC abbia permessi di lettura "
-                    "su 'Impostazioni / Azienda'."
-                )
             else:
                 print_warning(
-                    f"Claim API ha risposto HTTP {resp.status_code}. "
-                    "Inserisci la chiave Factum manualmente."
+                    "Claim completato ma chiave vuota. "
+                    "Inseriscila manualmente."
                 )
-        except httpx.HTTPError as e:
-            print_warning(f"Impossibile contattare il server Factum: {e}")
-            print_info("Inserisci la chiave Factum manualmente.")
-    else:
-        print_info("Auto-claim saltato.")
+        elif resp.status_code == 401:
+            print_error(
+                "Token FIC non valido o permessi insufficienti. "
+                "Verifica che il token FIC abbia permessi di lettura "
+                "su 'Impostazioni / Azienda'."
+            )
+            raise typer.Exit(1)
+        else:
+            print_warning(
+                f"Claim API ha risposto HTTP {resp.status_code}. "
+                "Inserisci la chiave Factum manualmente."
+            )
+    except httpx.HTTPError as e:
+        print_warning(f"Impossibile contattare il server Factum: {e}")
+        print_info("Inserisci la chiave Factum manualmente.")
 
+    # Override manuale per piani a pagamento
     if not factum_api_key:
+        # Claim fallito → prompt manuale sempre
         console.print("[bold]Passo facoltativo  —  API Key Factum Parse[/]")
         console.print(
             "  [dim]La trovi su: factum.pyragogy.org › Profilo › API Keys[/]"
@@ -292,6 +285,21 @@ async def _run_setup(settings: Settings) -> None:
         factum_api_key_raw = Prompt.ask(
             "  API Key Factum",
             default=env_current.get("FACTUM_API_KEY", ""),
+        )
+        factum_api_key = _sanitize(factum_api_key_raw)
+        console.print()
+    elif Confirm.ask(
+        "  Vuoi usare una chiave a pagamento personalizzata "
+        "invece del Free Tier?",
+        default=False,
+    ):
+        console.print("[bold]Passo facoltativo  —  API Key Factum Parse[/]")
+        console.print(
+            "  [dim]La trovi su: factum.pyragogy.org › Profilo › API Keys[/]"
+        )
+        factum_api_key_raw = Prompt.ask(
+            "  API Key Factum",
+            default=env_current.get("FACTUM_API_KEY", factum_api_key or ""),
         )
         factum_api_key = _sanitize(factum_api_key_raw)
         console.print()
@@ -356,7 +364,12 @@ async def _run_setup(settings: Settings) -> None:
     console.print(f"  FACTUM_WORKSPACE_DIR       {workspace_dir}")
     if acc_name:
         console.print(f"  Conto saldo automatico      {acc_name} (id={acc_id})")
-    console.print(f"  FACTUM_API_KEY             {'✅ impostata' if factum_api_key else '❌'}")
+    if factum_api_key:
+        status_icon = "🔁" if factum_key_is_existing else "✅"
+        label = "recuperata" if factum_key_is_existing else "attiva"
+        console.print(f"  FACTUM_API_KEY             {status_icon} {label.capitalize()} (Free Tier — 10 conv./mese)")
+    else:
+        console.print(f"  FACTUM_API_KEY             {'❌ non impostata'}")
     console.print()
 
     if Prompt.ask("  Scrivere il file .env con questi valori?", choices=["s", "n"], default="s") != "s":

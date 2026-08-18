@@ -711,6 +711,7 @@ async def collect_status(factum: Any, fic: Any, queue: Any) -> dict:
         "fic": {"ok": fic_ok, "url": getattr(fic, "_base_url", "")},
         "company": company,
         "payment_account": payment_account,
+        "factum_api_key": bool(settings.factum_api_key),
         "self_invoice": {
             "enabled": settings.fic_generate_self_invoice,
             "numeration": settings.fic_self_invoice_numeration,
@@ -718,6 +719,25 @@ async def collect_status(factum: Any, fic: Any, queue: Any) -> dict:
         },
         "queue": queue_summary,
     }
+
+
+def _factum_key_status(data: dict):
+    """Tabella status FACTUM_API_KEY per il dashboard."""
+    from rich.table import Table
+
+    table = Table(box=None, show_header=False, pad_edge=False)
+    table.add_column(style="bold", width=24)
+    table.add_column()
+    has_key = data.get("factum_api_key", False)
+    if has_key:
+        factum_ok = data.get("factum", {}).get("ok", False)
+        if factum_ok:
+            table.add_row("Stato", "✅ Attiva (Free Tier — 10 conversioni/mese)")
+        else:
+            table.add_row("Stato", "⚠️  Configurata ma API non raggiungibile")
+    else:
+        table.add_row("Stato", "❌ Non configurata (esegui `factum-fic setup`)")
+    return table
 
 
 def render_status(data: dict) -> None:
@@ -791,14 +811,17 @@ def render_status(data: dict) -> None:
         "[bold cyan]Azienda FIC[/]",
         company_table,
         "",
+        "[bold cyan]Factum Parse API Key[/]",
+        _factum_key_status(data),
+        "",
         "[bold cyan]Conto di pagamento (auto-pagamento spese)[/]",
         pay_table,
         "",
-        "[bold cyan]Autofatture SDI (TD17/TD18/TD19)[/]",
-        si_table,
-        "",
-        "[bold cyan]Coda locale SQLite[/]",
-        q_table,
+    "[bold cyan]Autofatture SDI (TD17/TD18/TD19)[/]",
+    si_table,
+    "",
+    "[bold cyan]Coda locale SQLite[/]",
+    q_table,
     )
     panel = Panel(content, title="📊 factum-fic status", border_style="cyan")
     console.print(panel)

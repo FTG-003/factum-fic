@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
@@ -204,6 +205,14 @@ class TestSetupWizard:
             "factum_fic.cli.commands.setup.FactumClient",
             MockFactumClientSetup,
         )
+        # Mock httpx.AsyncClient per claim (simula fallimento rete)
+        async def _mock_post(*a, **kw):
+            raise httpx.HTTPError("Mock claim failure")
+
+        monkeypatch.setattr(
+            "httpx.AsyncClient.post",
+            _mock_post,
+        )
         # Lavora in tmp_path invece di cwd per non toccare .env reale
         monkeypatch.chdir(tmp_path)
 
@@ -220,7 +229,7 @@ class TestSetupWizard:
         #   5. FACTUM_API_KEY (password)            → "fk_factum_abc"
         #   6. Scegli conto (1-2, default=1)        → 2
         #   7. Scrivere .env?                        → "s"
-        input_data = "\nsk_fic_123\n12345\nn\nfk_factum_abc\n2\ns\n"
+        input_data = "\nsk_fic_123\n12345\nfk_factum_abc\n2\ns\n"
 
         runner = CliRunner()
         result = runner.invoke(app, ["setup"], input=input_data)
@@ -243,7 +252,7 @@ class TestSetupWizard:
         self._setup_patches(monkeypatch, tmp_path)
 
         # Input: scelte valide fino alla domanda "Scrivere .env?" → "n"
-        input_data = "\nsk_fic_123\n12345\nn\nfk_factum_abc\n1\nn\n"
+        input_data = "\nsk_fic_123\n12345\nfk_factum_abc\n1\nn\n"
 
         runner = CliRunner()
         result = runner.invoke(app, ["setup"], input=input_data)
@@ -262,7 +271,7 @@ class TestSetupWizard:
             "FIC_TOKEN=sk_old\nINBOX_DIR=./custom_path\n"
         )
 
-        input_data = "\nsk_fic_new\n99999\nn\nfk_factum_new\n1\ns\n"
+        input_data = "\nsk_fic_new\n99999\nfk_factum_new\n1\ns\n"
 
         runner = CliRunner()
         runner.invoke(app, ["setup"], input=input_data)
@@ -280,7 +289,7 @@ class TestSetupWizard:
         """Scegliendo 0 per conto → PAYMENT_ACCOUNT non scritto."""
         self._setup_patches(monkeypatch, tmp_path)
 
-        input_data = "\nsk_fic_123\n12345\nn\nfk_factum_abc\n0\ns\n"
+        input_data = "\nsk_fic_123\n12345\nfk_factum_abc\n0\ns\n"
 
         runner = CliRunner()
         runner.invoke(app, ["setup"], input=input_data)
