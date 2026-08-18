@@ -351,3 +351,73 @@ class TestRicarica:
         # Non deve contenere segreti
         assert "sk_live_" not in output
         assert "api_key" not in output.lower()
+
+
+# ── Test get_user_companies response parsing ────────────────────────────────
+
+
+class TestGetUserCompanies:
+    """Verifica che get_user_companies estragga correttamente la lista
+    dal formato annidato di FIC v2: ``{"data": {"companies": [...]}}``."""
+
+    @pytest.mark.asyncio
+    async def test_parses_nested_data_companies(self, monkeypatch) -> None:
+        """Payload FIC v2 reale → lista estratta correttamente."""
+        from factum_fic.config import Settings
+        from factum_fic.core.fic_client import FICClient
+
+        client = FICClient(Settings(fic_token="test", FIC_COMPANY_ID="0"))
+
+        async def _fake_get(url: str, **kw):
+            class _Resp:
+                status_code = 200
+
+                def json(self):
+                    return {
+                        "data": {
+                            "companies": [
+                                {"id": 123, "name": "Azienda 1", "vat_number": "IT001"},
+                                {"id": 456, "name": "Azienda 2", "vat_number": "IT002"},
+                            ]
+                        }
+                    }
+
+                def raise_for_status(self):
+                    pass
+
+            return _Resp()
+
+        monkeypatch.setattr(client._client, "get", _fake_get)
+        companies = await client.get_user_companies()
+        await client.close()
+
+        assert len(companies) == 2
+        assert companies[0]["id"] == 123
+        assert companies[0]["name"] == "Azienda 1"
+        assert companies[1]["id"] == 456
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_list_on_missing_data(self, monkeypatch) -> None:
+        """Payload senza data → lista vuota, nessun crash."""
+        from factum_fic.config import Settings
+        from factum_fic.core.fic_client import FICClient
+
+        client = FICClient(Settings(fic_token="test", FIC_COMPANY_ID="0"))
+
+        async def _fake_get(url: str, **kw):
+            class _Resp:
+                status_code = 200
+
+                def json(self):
+                    return {}
+
+                def raise_for_status(self):
+                    pass
+
+            return _Resp()
+
+        monkeypatch.setattr(client._client, "get", _fake_get)
+        companies = await client.get_user_companies()
+        await client.close()
+
+        assert companies == []

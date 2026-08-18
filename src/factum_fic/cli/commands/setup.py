@@ -44,7 +44,10 @@ def _sanitize(value: str) -> str:
     """Rimuove spazi, newline e prefissi tipo 'FIC_COMPANY_ID=' o 'FIC_TOKEN='."""
     value = value.strip()
     # Rimuovi prefissi tipo CHIAVE=valore
-    value = re.sub(r'^(?:FIC_TOKEN|FIC_API_KEY|FIC_COMPANY_ID|FACTUM_API_KEY|FIC_ACCESS_TOKEN)\s*=\s*', '', value, flags=re.IGNORECASE)
+    value = re.sub(
+        r'^(?:FIC_TOKEN|FIC_API_KEY|FIC_COMPANY_ID|FACTUM_API_KEY|FIC_ACCESS_TOKEN)\s*=\s*',
+        '', value, flags=re.IGNORECASE,
+    )
     return value.strip()
 
 
@@ -120,9 +123,9 @@ async def _run_setup(settings: Settings) -> None:
     workspace = Path(workspace_raw).expanduser().resolve()
     _make_dirs(workspace)
     print_ok(f"Cartella di lavoro: [bold]{workspace}[/]")
-    print_ok(f"  ├── 📥 da_elaborare/   (trascina qui i tuoi file PDF / XML)")
-    print_ok(f"  ├── 📦 archiviate/     (file registrati con successo)")
-    print_ok(f"  └── ⚠️  da_verificare/  (file illeggibili o con anomalie)")
+    print_ok("  ├── 📥 da_elaborare/   (trascina qui i tuoi file PDF / XML)")
+    print_ok("  ├── 📦 archiviate/     (file registrati con successo)")
+    print_ok("  └── ⚠️  da_verificare/  (file illeggibili o con anomalie)")
     console.print()
 
     inbox_dir = str(workspace / "da_elaborare")

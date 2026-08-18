@@ -489,8 +489,11 @@ class FICClient:
         """
         response = await self._client.get("/user/companies")
         response.raise_for_status()
-        data = response.json()
-        return data.get("data", [])
+        raw = response.json()
+        nested = raw.get("data", {})
+        if isinstance(nested, dict):
+            return nested.get("companies", [])
+        return nested if isinstance(nested, list) else []
 
     async def health(self) -> bool:
         """Verifica connettività con FIC API."""
