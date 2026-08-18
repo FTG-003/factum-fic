@@ -370,6 +370,15 @@ def sync(
                             force=force,
                         )
                         results.append(result)
+                        # AUTH_ERROR: interrompe immediatamente tutti i PDF
+                        # successivi — inutile martellare l'API con chiave
+                        # non valida.
+                        if result.factum_status == "auth_error":
+                            print_error(
+                                "🔴 Chiave API Factum non valida o revocata. "
+                                "Elaborazione PDF sospesa."
+                            )
+                            break
                     except Exception as e:
                         print_error(f"❌ Errore durante elaborazione {p.name}: {e}")
                 if results:
@@ -447,6 +456,15 @@ def process_inbox(
                         force=force,
                     )
                     results.append(result)
+                    # AUTH_ERROR: interrompe immediatamente tutti i PDF
+                    # successivi — inutile martellare l'API con chiave
+                    # non valida.
+                    if result.factum_status == "auth_error":
+                        print_error(
+                            "🔴 Chiave API Factum non valida o revocata. "
+                            "Elaborazione PDF sospesa."
+                        )
+                        break
                 except Exception as e:
                     print_error(f"❌ Errore durante elaborazione {path.name}: {e}")
             if results:
