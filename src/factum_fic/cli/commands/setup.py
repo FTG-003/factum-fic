@@ -225,6 +225,7 @@ async def _run_setup(settings: Settings) -> None:
             claim_payload: dict[str, str | None] = {
                 "fic_token": fic_token,
                 "fic_company_id": fic_company_id,
+                "company_id": fic_company_id,
             }
             if piva:
                 claim_payload["vat_number"] = piva
