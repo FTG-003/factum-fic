@@ -1,6 +1,6 @@
 <div align="center">
   <img src=".github/assets/factum-FIC-github.png" alt="Factum-FIC" width="160"/>
-  <h1>Factum - Fatture in Cloud</h1>
+  <h1> Fatture in Cloud - Factum Tool</h1>
   <p><strong>Le tue fatture estere? Le registra Factum-FIC su Fatture in Cloud.<br>
   Da sole. In 3 secondi. Zero abbonamenti.</strong></p>
 </div>
