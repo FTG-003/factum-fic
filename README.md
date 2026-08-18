@@ -38,20 +38,17 @@ Factum-FIC fa tutto da solo. Tu lasci i file in una cartella, lanci un comando, 
 ```mermaid
 flowchart LR
     subgraph Tu
-        INBOX[📥 da_elaborare/]
+        INBOX["📥 da_elaborare/"]
     end
 
     subgraph Factum-FIC
-        XML[XML FatturaPA] --> LOCALE[Elaborazione locale
- gratis · illimitato]
-        PDF[PDF fattura estera] --> ENGINE[Factum Parse Engine
- 10 gratis / mese]
+        XML["XML FatturaPA"] --> LOCALE["Elaborazione locale<br>gratis · illimitato"]
+        PDF["PDF fattura estera"] --> ENGINE["Factum Parse Engine<br>10 gratis / mese"]
     end
 
     subgraph Fatture in Cloud
-        SPESA[✅ Spesa registrata]
-        BOZZA[📄 Autofattura in BOZZA
- TD17 / TD18 / TD19]
+        SPESA["✅ Spesa registrata"]
+        BOZZA["📄 Autofattura in BOZZA<br>TD17 / TD18 / TD19"]
     end
 
     INBOX --> XML
