@@ -20,12 +20,9 @@ import pytest
 
 from factum_fic.config import Settings
 from factum_fic.core.fic_client import FICClient
-from factum_fic.core.models import (
-    FICCreateSupplierRequest,
-)
+from factum_fic.core.models import FICCreateSupplierRequest
 from factum_fic.core.pipeline import _check_fic_exists
 from factum_fic.storage.queue import QueueStore
-
 
 # ── Mock transport per FIC con 2 documenti nella stessa data ────────────────
 
@@ -119,7 +116,6 @@ def _mock_fic_duplicate_check() -> httpx.MockTransport:
         if request.url.path.endswith("/received_documents") and request.method == "GET":
             entity_id = request.url.params.get("entity_id", "")
             date_from = request.url.params.get("date_from", "")
-            date_to = request.url.params.get("date_to", "")
 
             # Se entity_id=101 (OVH), restituisci un documento OVH esistente
             if entity_id == "101" and date_from == "2026-08-01":
