@@ -1,6 +1,6 @@
 <div align="center">
   <img src=".github/assets/factum-FIC-github.png" alt="Factum-FIC" width="160"/>
-  <h1>Factum - Fatture in Cloude</h1>
+  <h1>Factum - Fatture in Cloud</h1>
   <p><strong>Le tue fatture estere? Le registra Factum-FIC su Fatture in Cloud.<br>
   Da sole. In 3 secondi. Zero abbonamenti.</strong></p>
 </div>
@@ -35,32 +35,37 @@ Factum-FIC fa tutto da solo. Tu lasci i file in una cartella, lanci un comando, 
 ## Come funziona (in parole povere)
 
 ```mermaid
-flowchart TD
-    XML[📄 XML FatturaPA
-<em>da fornitore IT o SDI</em>] --> Locale[💻 Elaborazione locale offline
-<em>0 chiamate, 0 €, 0 secondi</em>]
-    Locale --> FIC[📤 Spesa registrata su FIC
-<em>nessuna autofattura</em>]
+flowchart LR
+    subgraph Tu
+        INBOX[📥 da_elaborare/]
+    end
 
-    PDF[🧾 PDF fattura estera
-<em>Hetzner, AWS, OpenAI…</em>] --> Parse[⚙️ Factum Parse Engine
-<em>estrazione testo sicura
-10 gratis / mese</em>]
-    Parse --> Mapper[📋 Riconoscimento fornitore
-<em>è estero? serve autofattura?</em>]
-    Mapper --> FIC2[📤 Spesa registrata su FIC]
-    Mapper --> Auto[📄 Autofattura TD17/18/19
-<em>generata automaticamente</em>]
-    Auto --> SDI[📨 Trasmessa allo SDI
-<em>Sistema di Interscambio
-Agenzia delle Entrate</em>]
+    subgraph Factum-FIC
+        XML[XML FatturaPA] --> LOCALE[Elaborazione locale
+ gratis · illimitato]
+        PDF[PDF fattura estera] --> ENGINE[Factum Parse Engine
+ 10 gratis / mese]
+    end
+
+    subgraph Fatture in Cloud
+        SPESA[✅ Spesa registrata]
+        BOZZA[📄 Autofattura in BOZZA
+ TD17 / TD18 / TD19]
+    end
+
+    INBOX --> XML
+    INBOX --> PDF
+    LOCALE --> SPESA
+    ENGINE --> SPESA
+    ENGINE --> BOZZA
 ```
 
-### Due percorsi, un risultato
+### Cosa succede
 
-**Hai un XML FatturaPA?** (quello che arriva dallo SDI quando compri da un fornitore italiano). Factum-FIC lo elabora in locale, gratis, senza mai mandare i tuoi dati su Internet. Zero chiamate a server esterni.
+Metti i file in `da_elaborare/`. Factum-FIC fa tutto da solo:
 
-**Hai un PDF?** (fattura di Hetzner, AWS, GitHub…). Factum-FIC estrae il testo in locale (sempre sul tuo computer) e lo invia in modo sicuro a Factum Parse Engine. Solo il testo, mai il PDF originale. Il parsing riconosce fornitore, importo, data e decide se serve autofattura. Se serve, la genera e la prepara per lo SDI.
+- **È un XML** (da fornitore italiano o SDI)? Lo legge in locale, gratis, i tuoi dati non escono dal computer. La spesa finisce su FIC.
+- **È un PDF** (Hetzner, AWS, OpenAI…)? Estrae il testo, lo analizza in sicurezza e registra la spesa su FIC. Se il fornitore è estero, genera anche l'autofattura in **bozza** (TD17/18/19), pronta da controllare e inviare.
 
 ---
 
