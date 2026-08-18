@@ -40,7 +40,7 @@ def _make_settings() -> Settings:
         factum_api_url="http://factum.test",
         factum_api_key="test-key",
         fic_base_url="http://fic.test",
-        fic_api_key="test-fic-key",
+        fic_token="test-fic-key",
         fic_company_id="12345",
     )  # type: ignore[call-arg]
 

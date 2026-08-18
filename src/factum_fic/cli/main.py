@@ -855,7 +855,7 @@ def ricarica() -> None:
 
     settings = Settings()
 
-    if not settings.fic_api_key or not settings.fic_company_id:
+    if not settings.fic_token or not settings.fic_company_id:
         print_error("❌ Configurazione FIC mancante. Esegui prima: factum-fic setup")
         raise typer.Exit(code=1)
 

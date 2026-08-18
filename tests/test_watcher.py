@@ -25,7 +25,7 @@ def mock_settings_for_watcher(watch_dir: Path) -> Settings:
         FACTUM_API_URL="https://mock.factum.test",
         FACTUM_API_KEY="mock-key",
         FIC_BASE_URL="https://mock.fic.test",
-        FIC_API_KEY="mock-fic-token",
+        FIC_TOKEN="mock-fic-token",
         FIC_COMPANY_ID="99999",
         WATCH_DIR=str(watch_dir),
     )

@@ -212,13 +212,15 @@ class TestSetupWizard:
         self._setup_patches(monkeypatch, tmp_path)
 
         # Input simulato:
-        #   1. FIC_API_KEY (password)              → "sk_fic_123"
-        #   2. FIC_COMPANY_ID                      → "12345"
-        #   3. Continuare anche se non forfettario? → "s" (sì)
-        #   4. Scegli conto (1-2, default=1)       → 2
+        #   0. Workspace (default)                  → enter
+        #   1. FIC_TOKEN (password)                 → "sk_fic_123"
+        #   2. FIC_COMPANY_ID                       → "12345"
+        #   3. (RF19 → nessuna domanda "continuare")
+        #   4. Attivare chiave Factum?              → "n"
         #   5. FACTUM_API_KEY (password)            → "fk_factum_abc"
-        #   6. Scrivere .env?                       → "s"
-        input_data = "sk_fic_123\n12345\ns\nn\nfk_factum_abc\n2\ns\n"
+        #   6. Scegli conto (1-2, default=1)        → 2
+        #   7. Scrivere .env?                        → "s"
+        input_data = "\nsk_fic_123\n12345\nn\nfk_factum_abc\n2\ns\n"
 
         runner = CliRunner()
         result = runner.invoke(app, ["setup"], input=input_data)
@@ -230,7 +232,7 @@ class TestSetupWizard:
         assert env_path.exists()
         content = env_path.read_text()
 
-        assert "FIC_API_KEY=sk_fic_123" in content
+        assert "FIC_TOKEN=sk_fic_123" in content
         assert "FIC_COMPANY_ID=12345" in content
         assert "FACTUM_API_KEY=fk_factum_abc" in content
         assert "FIC_PAYMENT_ACCOUNT_NAME=Carta di Credito" in content
@@ -241,7 +243,7 @@ class TestSetupWizard:
         self._setup_patches(monkeypatch, tmp_path)
 
         # Input: scelte valide fino alla domanda "Scrivere .env?" → "n"
-        input_data = "sk_fic_123\n12345\ns\nn\nfk_factum_abc\n1\nn\n"
+        input_data = "\nsk_fic_123\n12345\nn\nfk_factum_abc\n1\nn\n"
 
         runner = CliRunner()
         result = runner.invoke(app, ["setup"], input=input_data)
@@ -257,10 +259,10 @@ class TestSetupWizard:
         # Crea .env esistente con INBOX_DIR relativo (non assoluto, per evitare
         # che ensure_dirs nel callback provi a creare /custom/path)
         (tmp_path / ".env").write_text(
-            "FIC_API_KEY=sk_old\nINBOX_DIR=./custom_path\n"
+            "FIC_TOKEN=sk_old\nINBOX_DIR=./custom_path\n"
         )
 
-        input_data = "sk_fic_new\n99999\ns\nn\nfk_factum_new\n1\ns\n"
+        input_data = "\nsk_fic_new\n99999\nn\nfk_factum_new\n1\ns\n"
 
         runner = CliRunner()
         runner.invoke(app, ["setup"], input=input_data)
@@ -268,9 +270,9 @@ class TestSetupWizard:
         content = (tmp_path / ".env").read_text()
 
         # Valore aggiornato
-        assert "FIC_API_KEY=sk_fic_new" in content
-        # Valore preservato (non toccato da setup)
-        assert "INBOX_DIR=./custom_path" in content
+        assert "FIC_TOKEN=sk_fic_new" in content
+        # INBOX_DIR sovrascritto dal wizard (calcolato dal workspace)
+        assert "INBOX_DIR=" in content
         # Nuova chiave aggiunta
         assert "FACTUM_API_KEY=fk_factum_new" in content
 
@@ -278,7 +280,7 @@ class TestSetupWizard:
         """Scegliendo 0 per conto → PAYMENT_ACCOUNT non scritto."""
         self._setup_patches(monkeypatch, tmp_path)
 
-        input_data = "sk_fic_123\n12345\ns\nn\nfk_factum_abc\n0\ns\n"
+        input_data = "\nsk_fic_123\n12345\nn\nfk_factum_abc\n0\ns\n"
 
         runner = CliRunner()
         runner.invoke(app, ["setup"], input=input_data)
@@ -331,8 +333,8 @@ class TestRicarica:
             _MockFIC,
         )
 
-        # Imposta FIC_API_KEY e FIC_COMPANY_ID nell'ambiente
-        monkeypatch.setenv("FIC_API_KEY", "sk_fic_test_123")
+        # Imposta FIC_TOKEN e FIC_COMPANY_ID nell'ambiente
+        monkeypatch.setenv("FIC_TOKEN", "sk_fic_test_123")
         monkeypatch.setenv("FIC_COMPANY_ID", "99999")
 
         runner = CliRunner()

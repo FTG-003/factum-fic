@@ -28,7 +28,7 @@ class FICClient:
 
     def __init__(self, settings: Settings) -> None:
         self._base_url = settings.fic_base_url.rstrip("/")
-        self._api_key = settings.fic_api_key
+        self._api_key = settings.fic_token
         self._company_id = settings.fic_company_id
         self._auto_paid = settings.fic_auto_paid
         self._payment_account_name = settings.fic_payment_account_name
@@ -479,6 +479,18 @@ class FICClient:
         response.raise_for_status()
         data = response.json()
         return FICExpenseResponse(**data.get("data", {}))
+
+    @selective_retry
+    async def get_user_companies(self) -> list[dict[str, Any]]:
+        """Recupera l'elenco delle aziende associate all'utente FIC.
+
+        Returns:
+            Lista di dizionari con id, name, vat_number, fiscal_code.
+        """
+        response = await self._client.get("/user/companies")
+        response.raise_for_status()
+        data = response.json()
+        return data.get("data", [])
 
     async def health(self) -> bool:
         """Verifica connettività con FIC API."""

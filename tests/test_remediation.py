@@ -364,7 +364,7 @@ class TestStrictCurrency:
             FACTUM_API_URL="http://test",
             FACTUM_API_KEY="k",
             FIC_BASE_URL="http://test",
-            FIC_API_KEY="k",
+            FIC_TOKEN="k",
             FIC_COMPANY_ID="0",
         )
         assert s.strict_currency is True
@@ -375,7 +375,7 @@ class TestStrictCurrency:
             FACTUM_API_URL="http://test",
             FACTUM_API_KEY="k",
             FIC_BASE_URL="http://test",
-            FIC_API_KEY="k",
+            FIC_TOKEN="k",
             FIC_COMPANY_ID="0",
             STRICT_CURRENCY="false",
         )

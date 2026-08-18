@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,7 +30,10 @@ class Settings(BaseSettings):
         default="https://api-v2.fattureincloud.it",
         alias="FIC_BASE_URL",
     )
-    fic_api_key: str = Field(default="", alias="FIC_API_KEY")
+    fic_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("FIC_TOKEN", "FIC_API_KEY"),
+    )
     fic_company_id: str = Field(default="", alias="FIC_COMPANY_ID")
 
     # Directory gestione fatture (italiano)
@@ -43,6 +46,12 @@ class Settings(BaseSettings):
 
     # Watcher
     watch_dir: str = Field(default="~/Downloads", alias="WATCH_DIR")
+
+    # Workspace root (creato da setup)
+    factum_workspace_dir: str | None = Field(
+        default=None,
+        alias="FACTUM_WORKSPACE_DIR",
+    )
 
     # Auto-pagamento spesa su FIC
     fic_auto_paid: bool = Field(
