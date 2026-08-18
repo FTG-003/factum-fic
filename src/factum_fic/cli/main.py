@@ -28,6 +28,8 @@ _ALIASES: dict[str, str] = {
     "elabora": "sync",
     "auto": "watch",
     "riprova-autofatture": "riprova-autofatture",
+    "ricarica": "ricarica",
+    "buy-credits": "ricarica",
 }
 
 
@@ -835,3 +837,64 @@ def history() -> None:
     from factum_fic.cli.commands.history import history as _history
 
     _history()
+
+
+@app.command()
+def ricarica() -> None:
+    """Genera link per ricaricare crediti PDF Factum Parse.
+
+    Apre il browser al checkout sicuro di Factum Parse, senza
+    esporre segreti nei parametri URL.
+
+    Alias: ``factum-fic buy-credits``
+    """
+    import webbrowser
+
+    from factum_fic.config import Settings
+    from factum_fic.core.fic_client import FICClient
+
+    settings = Settings()
+
+    if not settings.fic_api_key or not settings.fic_company_id:
+        print_error("❌ Configurazione FIC mancante. Esegui prima: factum-fic setup")
+        raise typer.Exit(code=1)
+
+    async def _ricarica() -> None:
+        from rich.panel import Panel
+        from rich.prompt import Confirm
+
+        fic = FICClient(settings)
+        try:
+            info = await fic.get_company_info()
+            piva = (info.get("vat_number") or "").strip()
+            if not piva:
+                print_error("❌ Impossibile recuperare la P.IVA dal profilo FIC.")
+                raise typer.Exit(code=1)
+
+            url = f"https://checkout.factum.pyragogy.org/buy/100-pdf?checkout[custom][piva]={piva}"
+
+            # Verifica che nessun segreto sia finito nell'URL
+            if "sk_live_" in url or "api_key" in url.lower():
+                print_error("❌ ERRORE DI SICUREZZA: l'URL contiene credenziali!")
+                raise typer.Exit(code=1)
+
+            console.print()
+            console.print(
+                Panel.fit(
+                    f"[bold cyan]📄 Ricarica crediti Factum Parse[/]\n\n"
+                    f"  P.IVA: [green]{piva}[/]\n"
+                    f"\n"
+                    f"  Apri il link nel browser per acquistare "
+                    f"[bold]100 conversioni PDF[/] aggiuntive:\n"
+                    f"  [blue underline]{url}[/]\n",
+                    border_style="cyan",
+                )
+            )
+
+            if Confirm.ask("  Aprire il link nel browser?", default=True):
+                webbrowser.open(url)
+                print_ok("Browser aperto.")
+        finally:
+            await fic.close()
+
+    asyncio.run(_ricarica())

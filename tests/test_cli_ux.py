@@ -218,7 +218,7 @@ class TestSetupWizard:
         #   4. Scegli conto (1-2, default=1)       → 2
         #   5. FACTUM_API_KEY (password)            → "fk_factum_abc"
         #   6. Scrivere .env?                       → "s"
-        input_data = "sk_fic_123\n12345\ns\n2\nfk_factum_abc\ns\n"
+        input_data = "sk_fic_123\n12345\ns\nn\nfk_factum_abc\n2\ns\n"
 
         runner = CliRunner()
         result = runner.invoke(app, ["setup"], input=input_data)
@@ -241,7 +241,7 @@ class TestSetupWizard:
         self._setup_patches(monkeypatch, tmp_path)
 
         # Input: scelte valide fino alla domanda "Scrivere .env?" → "n"
-        input_data = "sk_fic_123\n12345\ns\n1\nfk_factum_abc\nn\n"
+        input_data = "sk_fic_123\n12345\ns\nn\nfk_factum_abc\n1\nn\n"
 
         runner = CliRunner()
         result = runner.invoke(app, ["setup"], input=input_data)
@@ -260,7 +260,7 @@ class TestSetupWizard:
             "FIC_API_KEY=sk_old\nINBOX_DIR=./custom_path\n"
         )
 
-        input_data = "sk_fic_new\n99999\ns\n1\nfk_factum_new\ns\n"
+        input_data = "sk_fic_new\n99999\ns\nn\nfk_factum_new\n1\ns\n"
 
         runner = CliRunner()
         runner.invoke(app, ["setup"], input=input_data)
@@ -278,7 +278,7 @@ class TestSetupWizard:
         """Scegliendo 0 per conto → PAYMENT_ACCOUNT non scritto."""
         self._setup_patches(monkeypatch, tmp_path)
 
-        input_data = "sk_fic_123\n12345\ns\n0\nfk_factum_abc\ns\n"
+        input_data = "sk_fic_123\n12345\ns\nn\nfk_factum_abc\n0\ns\n"
 
         runner = CliRunner()
         runner.invoke(app, ["setup"], input=input_data)
@@ -287,3 +287,65 @@ class TestSetupWizard:
         # PAYMENT_ACCOUNT_NAME deve essere stringa vuota (non scritto)
         assert "FIC_PAYMENT_ACCOUNT_NAME=" not in content
         assert "FIC_PAYMENT_ACCOUNT_ID=" not in content
+
+
+# ── Test ricarica command ─────────────────────────────────────────────────────
+
+
+class TestRicarica:
+    """Verifica ``factum-fic ricarica`` — URL sicuro senza segreti."""
+
+    def test_ricarica_needs_config(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Senza .env configurato → errore e uscita."""
+        from factum_fic.cli.main import app
+
+        runner = CliRunner()
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, ["ricarica"])
+        assert result.exit_code != 0
+
+    def test_ricarica_url_no_secret_in_params(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """URL generato non contiene sk_live_ o segreti.
+
+        Simula configurazione FIC valida e verifica che l'URL
+        contenga solo piva, non credenziali.
+        """
+        from factum_fic.cli.main import app
+
+        # Mock FICClient.get_company_info a livello di modulo
+        class _MockFIC:
+            def __init__(self, settings=None) -> None:
+                pass
+
+            async def get_company_info(self) -> dict:
+                return {
+                    "vat_number": "IT01234567890",
+                    "name": "Test Srl",
+                }
+
+            async def close(self) -> None:
+                return None
+
+        monkeypatch.setattr(
+            "factum_fic.core.fic_client.FICClient",
+            _MockFIC,
+        )
+
+        # Imposta FIC_API_KEY e FIC_COMPANY_ID nell'ambiente
+        monkeypatch.setenv("FIC_API_KEY", "sk_fic_test_123")
+        monkeypatch.setenv("FIC_COMPANY_ID", "99999")
+
+        runner = CliRunner()
+        # Usa input="n" per non aprire il browser
+        result = runner.invoke(app, ["ricarica"], input="n\n")
+
+        assert result.exit_code == 0, f"Uscito con errore: {result.output}"
+        output = result.output
+
+        # Deve mostrare l'URL con piva
+        assert "checkout.factum.pyragogy.org" in output
+        assert "IT01234567890" in output
+
+        # Non deve contenere segreti
+        assert "sk_live_" not in output
+        assert "api_key" not in output.lower()
