@@ -35,6 +35,7 @@ from factum_fic.core.models import (
     CurrencyConversionError,
     DocumentStatus,
     FactumAuthError,
+    FactumInsufficientCreditsError,
     FactumNetworkError,
     FactumParseResult,
     FactumParsingError,
@@ -674,6 +675,40 @@ async def process_file(
                 file=file_event,
                 status=DocumentStatus.PENDING,
                 factum_status="quota_exceeded",
+                factum_error=str(exc),
+            )
+
+        except FactumInsufficientCreditsError as exc:
+            # 402 → crediti insufficienti: chiama checkout-link, mostra messaggio
+            logger.warning(
+                "Crediti insufficienti per %s: %s. Richiedo checkout link...",
+                path.name, exc,
+            )
+            queue.mark_quota_exceeded(sha, str(exc), path=str(path))
+            # Chiama backend per ottenere il checkout link con P.IVA
+            try:
+                checkout_data = await factum.get_checkout_link()
+                checkout_url = checkout_data.get("checkout_url", "")
+                piva = checkout_data.get("piva", "") or ""
+            except Exception:
+                checkout_url = ""
+                piva = ""
+            if checkout_url and piva:
+                msg = (
+                    f"\n⚠️ Crediti esauriti per la P.IVA {piva}.\n"
+                    f"👉 Ricarica 100 documenti a 9.99€ qui: {checkout_url}\n"
+                )
+            else:
+                msg = (
+                    "\n⚠️ Crediti esauriti.\n"
+                    "👉 Esegui 'factum-fic ricarica' per generare il link di acquisto.\n"
+                )
+            logger.warning(msg)
+            print(msg, flush=True)
+            return PipelineResult(
+                file=file_event,
+                status=DocumentStatus.PENDING,
+                factum_status="insufficient_credits",
                 factum_error=str(exc),
             )
 

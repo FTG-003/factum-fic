@@ -209,6 +209,7 @@ dev = [
 dev = [
     { name = "pytest-asyncio" },
     { name = "reportlab" },
+    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -232,6 +233,7 @@ provides-extras = ["dev"]
 dev = [
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "reportlab", specifier = ">=4.0.0" },
+    { name = "ruff", specifier = ">=0.16.3" },
 ]
 
 [[package]]

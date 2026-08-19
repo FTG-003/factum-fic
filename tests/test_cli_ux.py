@@ -318,33 +318,37 @@ class TestRicarica:
     def test_ricarica_url_no_secret_in_params(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """URL generato non contiene sk_live_ o segreti.
 
-        Simula configurazione FIC valida e verifica che l'URL
+        Simula risposta checkout-link dal backend Factum e verifica che l'URL
         contenga solo piva, non credenziali.
         """
         from factum_fic.cli.main import app
 
-        # Mock FICClient.get_company_info a livello di modulo
-        class _MockFIC:
+        # Mock FactumClient.get_checkout_link
+        class _MockFactum:
             def __init__(self, settings=None) -> None:
                 pass
 
-            async def get_company_info(self) -> dict:
+            async def get_checkout_link(self) -> dict:
                 return {
-                    "vat_number": "IT01234567890",
-                    "name": "Test Srl",
+                    "checkout_url": (
+                        "https://pyragogy.lemonsqueezy.com/checkout/buy/"
+                        "d616a09d-75b3-48de-b41b-d2cc19589333"
+                        "?checkout[custom][piva]=IT01234567890&embed=1"
+                    ),
+                    "piva": "IT01234567890",
+                    "variant_id": "d616a09d-75b3-48de-b41b-d2cc19589333",
                 }
 
             async def close(self) -> None:
                 return None
 
         monkeypatch.setattr(
-            "factum_fic.core.fic_client.FICClient",
-            _MockFIC,
+            "factum_fic.core.factum_client.FactumClient",
+            _MockFactum,
         )
 
-        # Imposta FIC_TOKEN e FIC_COMPANY_ID nell'ambiente
-        monkeypatch.setenv("FIC_TOKEN", "sk_fic_test_123")
-        monkeypatch.setenv("FIC_COMPANY_ID", "99999")
+        # Imposta FACTUM_API_KEY nell'ambiente
+        monkeypatch.setenv("FACTUM_API_KEY", "sk_live_test_key_abc123")
 
         runner = CliRunner()
         # Usa input="n" per non aprire il browser
@@ -354,7 +358,7 @@ class TestRicarica:
         output = result.output
 
         # Deve mostrare l'URL con piva
-        assert "checkout.factum.pyragogy.org" in output
+        assert "pyragogy.lemonsqueezy.com" in output
         assert "IT01234567890" in output
 
         # Non deve contenere segreti

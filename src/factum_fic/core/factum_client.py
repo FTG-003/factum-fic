@@ -11,6 +11,7 @@ import httpx
 from factum_fic.config import Settings
 from factum_fic.core.models import (
     FactumAuthError,
+    FactumInsufficientCreditsError,
     FactumNetworkError,
     FactumParsingError,
     FactumQuotaExceededError,
@@ -66,6 +67,7 @@ class FactumClient:
 
         Gestisce gli errori HTTP in modo granulare:
         - 401/403 → FactumAuthError (credenziali non valide)
+        - 402     → FactumInsufficientCreditsError (crediti insufficienti)
         - 422     → FactumParsingError (errore permanente di parsing)
         - 429     → FactumQuotaExceededError (crediti esauriti)
         - 5xx     → FactumNetworkError (errore transitorio server)
@@ -84,6 +86,13 @@ class FactumClient:
             raise FactumAuthError(
                 "Chiave API Factum non valida o revocata. "
                 "Elaborazione PDF sospesa."
+            )
+
+        # 402 → crediti insufficienti
+        if response.status_code == 402:
+            body = response.text[:500]
+            raise FactumInsufficientCreditsError(
+                f"Crediti insufficienti per completare il parsing (HTTP 402): {body}"
             )
 
         # 422 → errore permanente di parsing (testo non elaborabile)
@@ -116,6 +125,46 @@ class FactumClient:
             return r.status_code == 200
         except httpx.HTTPError:
             return False
+
+    async def get_checkout_link(self) -> dict:
+        """Chiama GET /api/v1/auth/checkout-link e restituisce il link di ricarica.
+
+        Returns:
+            Dizionario con checkout_url, piva, variant_id.
+
+        Raises:
+            FactumAuthError: Se la chiave API non è valida (401).
+            FactumNetworkError: Per errori di rete o 5xx.
+        """
+        try:
+            r = await self._client.get("/api/v1/auth/checkout-link", timeout=15.0)
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as exc:
+            raise FactumNetworkError(
+                f"Errore di rete durante la richiesta checkout link: {exc}"
+            ) from exc
+
+        if r.status_code == 401:
+            raise FactumAuthError(
+                "Chiave API Factum non valida. "
+                "Impossibile generare il link di ricarica."
+            )
+
+        if r.status_code == 404:
+            # Nessun account associato alla chiave
+            return {
+                "checkout_url": "",
+                "piva": "",
+                "variant_id": "",
+            }
+
+        if 500 <= r.status_code < 600:
+            raise FactumNetworkError(
+                f"Errore server Factum nel checkout-link (HTTP {r.status_code}): "
+                f"{r.text[:300]}"
+            )
+
+        r.raise_for_status()
+        return r.json()
 
     @staticmethod
     def compute_hash(content: bytes) -> str:

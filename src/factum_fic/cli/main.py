@@ -467,6 +467,11 @@ def process_inbox(
                             "Elaborazione PDF sospesa."
                         )
                         break
+                    # INSUFFICIENT_CREDITS: interrompe l'elaborazione —
+                    # il messaggio con checkout link è già stato stampato
+                    # da pipeline.process_file().
+                    if result.factum_status == "insufficient_credits":
+                        break
                 except Exception as e:
                     print_error(f"❌ Errore durante elaborazione {path.name}: {e}")
             if results:
@@ -866,38 +871,45 @@ def history() -> None:
 def ricarica() -> None:
     """Genera link per ricaricare crediti PDF Factum Parse.
 
-    Apre il browser al checkout sicuro di Factum Parse, senza
-    esporre segreti nei parametri URL.
+    Recupera il checkout link dall'API Factum (precompilato con P.IVA)
+    e apre il browser. Non espone segreti nei parametri URL.
 
     Alias: ``factum-fic buy-credits``
     """
     import webbrowser
 
-    from factum_fic.config import Settings
-    from factum_fic.core.fic_client import FICClient
+    from factum_fic.core.factum_client import FactumClient
 
-    settings = Settings()
+    settings = load_settings()
 
-    if not settings.fic_token or not settings.fic_company_id:
-        print_error("❌ Configurazione FIC mancante. Esegui prima: factum-fic setup")
+    if not settings.factum_api_key:
+        print_error(
+            "❌ Chiave API Factum non configurata. "
+            "Esegui prima: factum-fic setup"
+        )
         raise typer.Exit(code=1)
 
     async def _ricarica() -> None:
         from rich.panel import Panel
         from rich.prompt import Confirm
 
-        fic = FICClient(settings)
+        factum = FactumClient(settings)
         try:
-            info = await fic.get_company_info()
-            piva = (info.get("vat_number") or "").strip()
-            if not piva:
-                print_error("❌ Impossibile recuperare la P.IVA dal profilo FIC.")
+            checkout_data = await factum.get_checkout_link()
+            checkout_url = checkout_data.get("checkout_url", "")
+            piva = checkout_data.get("piva", "") or ""
+            variant_id = checkout_data.get("variant_id", "") or ""
+
+            if not checkout_url:
+                print_error(
+                    "❌ Impossibile generare il link di ricarica. "
+                    "Verifica che la licenza Lemon Squeezy sia associata "
+                    "a un account con P.IVA."
+                )
                 raise typer.Exit(code=1)
 
-            url = f"https://checkout.factum.pyragogy.org/buy/100-pdf?checkout[custom][piva]={piva}"
-
             # Verifica che nessun segreto sia finito nell'URL
-            if "sk_live_" in url or "api_key" in url.lower():
+            if "sk_live_" in checkout_url or "api_key" in checkout_url.lower():
                 print_error("❌ ERRORE DI SICUREZZA: l'URL contiene credenziali!")
                 raise typer.Exit(code=1)
 
@@ -906,18 +918,19 @@ def ricarica() -> None:
                 Panel.fit(
                     f"[bold cyan]📄 Ricarica crediti Factum Parse[/]\n\n"
                     f"  P.IVA: [green]{piva}[/]\n"
+                    f"  Variante: [green]{variant_id}[/]\n"
                     f"\n"
                     f"  Apri il link nel browser per acquistare "
-                    f"[bold]100 conversioni PDF[/] aggiuntive:\n"
-                    f"  [blue underline]{url}[/]\n",
+                    f"[bold]crediti PDF[/] aggiuntivi:\n"
+                    f"  [blue underline]{checkout_url}[/]\n",
                     border_style="cyan",
                 )
             )
 
             if Confirm.ask("  Aprire il link nel browser?", default=True):
-                webbrowser.open(url)
+                webbrowser.open(checkout_url)
                 print_ok("Browser aperto.")
         finally:
-            await fic.close()
+            await factum.close()
 
     asyncio.run(_ricarica())

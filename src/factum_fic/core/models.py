@@ -69,6 +69,10 @@ class FactumAuthError(Exception):
     """Sollevata quando Factum API restituisce 401/403 (credenziali non valide)."""
 
 
+class FactumInsufficientCreditsError(Exception):
+    """Sollevata quando Factum API restituisce 402 (crediti insufficienti)."""
+
+
 class FactumQuotaExceededError(Exception):
     """Sollevata quando Factum API restituisce 429 (crediti esauriti)."""
 
