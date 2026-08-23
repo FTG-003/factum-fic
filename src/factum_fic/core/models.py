@@ -247,6 +247,8 @@ class FICCreateIssuedDocumentRequest(BaseModel):
     notes: str = ""
     original_document_id: int | None = None
     original_document_description: str = ""
+    original_invoice_number: str = ""
+    original_invoice_date: str = ""
     # Dati fornitore estero per SDI (ei_raw)
     supplier_name: str = ""
     supplier_vat_number: str | None = None

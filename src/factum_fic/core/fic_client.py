@@ -187,7 +187,19 @@ class FICClient:
         response.raise_for_status()
         data = response.json()
         entities = data.get("data", [])
-        return entities[0] if entities else None
+        if not entities:
+            return None
+        # Verifica che il nome del fornitore corrisponda (case-insensitive).
+        # FIC API con field=name NON fa exact match: può restituire
+        # risultati non pertinenti (es. primo alfabetico). Se il nome
+        # non corrisponde, restituiamo None per forzare la creazione.
+        name_lower = name.lower().strip()
+        for entity in entities:
+            entity_name = (entity.get("name") or "").lower().strip()
+            if entity_name == name_lower or name_lower in entity_name or entity_name in name_lower:
+                return entity
+        # Nessun match esatto: forza creazione nuova anagrafica
+        return None
 
     # ── Ricerca documento esistente ────────────────────────────────────────────
 
@@ -406,6 +418,15 @@ class FICClient:
             "vat_kind": "I",
             "reverse_charge": "N6.3",  # acquisto servizi esteri art. 17 c. 2
         }
+
+        # DatiFattureCollegate: riferimento alla fattura originale del fornitore
+        # estero (IdDocumento + Data). Questi dati finiscono nel tracciato SDI
+        # XML per garantire la tracciabilita' tra autofattura e documento estero.
+        if doc.original_invoice_number and doc.original_invoice_date:
+            fic_payload["ei_data"]["fattura_collegata"] = {
+                "id_documento": doc.original_invoice_number,
+                "data": doc.original_invoice_date,
+            }
 
         payload = {"data": fic_payload}
         response = await self._client.post(

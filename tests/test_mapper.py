@@ -69,7 +69,8 @@ def test_build_expense_autofattura(mapper: Mapper, sample_factum_result: dict) -
     result = FactumParseResult(**sample_factum_result)
     expense = mapper.build_expense(result)
     assert expense.is_autofattura is True
-    assert "art. 17-ter" in expense.notes
+    assert "art. 17 c. 2" in expense.notes
+    assert "17-ter" not in expense.notes
 
 
 def test_account_for_hosting(mapper: Mapper) -> None:
@@ -166,6 +167,11 @@ async def test_convert_currency_same() -> None:
 @pytest.mark.asyncio
 async def test_convert_currency_usd_to_eur() -> None:
     """USD → EUR: chiamata API Frankfurter con risposta mockata."""
+    from factum_fic.core.mapper import _EXCHANGE_RATES_CACHE
+
+    # Pulisce la cache per evitare interferenze da chiamate reali precedenti
+    _EXCHANGE_RATES_CACHE.clear()
+
     mock_response = {"amount": 1.0, "base": "USD", "date": "2026-08-16", "rates": {"EUR": 0.92}}
 
     with patch("httpx.AsyncClient") as mock_client:
@@ -360,7 +366,12 @@ def test_build_self_invoice_request_td19(mapper: Mapper) -> None:
     assert si_request.supplier_country_iso == "ES"
     assert si_request.numeration == "/TD19"
     assert "[TD19]" in si_request.description
-    assert "Nota di prova" in si_request.notes  # note originali preservate
+    # Note unica e pulita: non deve contenere expense.notes (nessuna
+    # concatenazione) né riferimento all'art. 17-ter, ma solo art. 17 c. 2
+    assert "17-ter" not in si_request.notes
+    assert "art. 17 c. 2 DPR 633/72" in si_request.notes
+    assert "Nota di prova" not in si_request.notes
+    assert si_request.notes.count("Autofattura") == 1
 
 
 def test_build_self_invoice_request_zero_net(mapper: Mapper) -> None:
@@ -387,3 +398,40 @@ def test_build_self_invoice_request_zero_net(mapper: Mapper) -> None:
     assert si_request.amount_net == 0.0
     assert si_request.amount_vat == 0.0
     assert si_request.amount_gross == 0.0
+
+
+def test_build_self_invoice_note_conversion(mapper: Mapper) -> None:
+    """Nota autofattura: include importo originale, valuta e tasso cambio (senza duplicazione)."""
+    expense = FICCreateExpenseRequest(
+        entity_id=43,
+        date="2026-08-23",
+        description="OpenRouter, Inc — n. 425IIFB00004 — del 2026-08-23",
+        amount_net=42.56,
+        amount_vat=0.0,
+        amount_gross=42.56,
+        is_autofattura=True,
+        notes="Qualunque testo LLM che non deve finire nell'autofattura",
+    )
+
+    si_request = mapper.build_self_invoice_request(
+        expense=expense,
+        expense_id=12345,
+        numeration="/TD17",
+        vat_value=22,
+        supplier_name="OpenRouter, Inc",
+        supplier_country_iso="US",
+        self_invoice_type=SelfInvoiceType.TD17,
+        original_amount=49.79,
+        original_currency="USD",
+        exchange_rate=0.8547,
+    )
+
+    assert si_request.self_invoice_type == SelfInvoiceType.TD17
+    assert "art. 17 c. 2 DPR 633/72" in si_request.notes
+    assert "49.79 USD" in si_request.notes
+    assert "0.8547" in si_request.notes
+    assert "12345" in si_request.notes  # rif. spesa FIC
+    # Nessuna duplicazione delle note LLM originali
+    assert "Note originali" not in si_request.notes
+    assert "Qualunque testo LLM" not in si_request.notes
+    assert si_request.notes.count("Autofattura") == 1

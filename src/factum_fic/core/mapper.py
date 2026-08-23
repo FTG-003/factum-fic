@@ -115,7 +115,7 @@ async def convert_currency(from_currency: str, to_currency: str = "EUR") -> floa
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(
-                "https://api.frankfurter.app/latest",
+                "https://api.frankfurter.dev/v1/latest",
                 params={"from": from_currency, "to": to_currency},
             )
         resp.raise_for_status()
@@ -163,9 +163,13 @@ class Mapper:
         if country and country != "IT":
             return DocumentType.SELF_INVOICE
 
+        # VAT non italiana presente (es. EIN USA): fornitore estero certo
+        if vat and not vat.startswith("IT"):
+            return DocumentType.SELF_INVOICE
+
         # Fallback: se il nome del fornitore matcha vendor noti esteri
         name = (result.supplier_name or "").lower()
-        if any(k in name for k in ("aws", "amazon", "github", "openai", "digitalocean", "hetzner")):
+        if any(k in name for k in ("aws", "amazon", "github", "openai", "digitalocean", "hetzner", "openrouter")):
             return DocumentType.SELF_INVOICE
 
         return DocumentType.EXPENSE
@@ -311,7 +315,7 @@ class Mapper:
         notes = ""
         if doc_type == DocumentType.SELF_INVOICE:
             notes = (
-                f"Autofattura ai sensi dell'art. 17-ter DPR 633/72 per acquisto "
+                f"Autofattura ai sensi dell'art. 17 c. 2 DPR 633/72 per acquisto "
                 f"da {result.supplier_name}. Documento elaborato via Factum Parse API "
                 f"(Zero Data Retention)."
             )
@@ -347,6 +351,11 @@ class Mapper:
         supplier_vat_number: str | None = None,
         supplier_country_iso: str = "XX",
         self_invoice_type: SelfInvoiceType = SelfInvoiceType.TD17,
+        original_amount: float | None = None,
+        original_currency: str = "",
+        exchange_rate: float | None = None,
+        original_invoice_number: str = "",
+        original_invoice_date: str = "",
     ) -> FICCreateIssuedDocumentRequest:
         """Costruisce la request per creare un'autofattura SDI su FIC.
 
@@ -368,6 +377,16 @@ class Mapper:
             supplier_vat_number: P.IVA fornitore estero (se presente).
             supplier_country_iso: Codice ISO del paese fornitore.
             self_invoice_type: Tipologia SDI (TD17/TD18/TD19).
+            original_amount: Importo originale in valuta estera prima della conversione
+                             (es. 49.79). Se None, non viene inclusa la nota cambio.
+            original_currency: Valuta originale (es. "USD"). Necessario solo se
+                               original_amount è fornito.
+            exchange_rate: Tasso di cambio applicato (es. 0.85477). Necessario solo
+                           se original_amount è fornito.
+            original_invoice_number: Numero fattura originale del fornitore estero
+                                     (per DatiFattureCollegate in SDI).
+            original_invoice_date: Data fattura originale del fornitore estero
+                                   (per DatiFattureCollegate in SDI, AAAA-MM-GG).
 
         Returns:
             FICCreateIssuedDocumentRequest pronto per ``create_issued_document()``.
@@ -376,13 +395,22 @@ class Mapper:
         vat = round(net * vat_value / 100, 2)
         gross = round(net + vat, 2)
 
+        # Nota unica e pulita: nessuna concatenazione di expense.notes
+        # (che conterrebbe il testo LLM generato in build_expense e la
+        # nota di conversione da _convert_currency_strict, creando duplicazione).
         notes = (
             f"Autofattura ai sensi dell'art. 17 c. 2 DPR 633/72 per acquisto "
-            f"da fornitore estero - rif. spesa FIC n. {expense_id}. "
-            f"Documento elaborato via Factum Parse API (Zero Data Retention)."
+            f"da fornitore estero — rif. spesa FIC n. {expense_id}."
         )
-        if expense.notes:
-            notes += f"\nNote originali: {expense.notes}"
+        if original_amount is not None and original_currency and exchange_rate is not None:
+            notes += (
+                f" Importo originale: {original_amount:.2f} {original_currency} — "
+                f"Tasso cambio {exchange_rate:.4f} applicato."
+            )
+        notes += (
+            f" Documento elaborato via Factum Parse API "
+            f"(Zero Data Retention)."
+        )
 
         description = expense.description
         if description and self_invoice_type.value not in description:
@@ -404,4 +432,6 @@ class Mapper:
             supplier_name=supplier_name,
             supplier_vat_number=supplier_vat_number,
             supplier_country_iso=supplier_country_iso,
+            original_invoice_number=original_invoice_number,
+            original_invoice_date=original_invoice_date,
         )

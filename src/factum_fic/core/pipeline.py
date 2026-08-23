@@ -300,11 +300,39 @@ def _enrich_from_payload(factum_resp: FactumResponse) -> None:
     raw_norm.setdefault("amount_gross", round(gross, 2))
     result.raw = raw_norm
 
+    # ── Valuta ────────────────────────────────────────────────────────
+    # Factum NON popola result.currency di default (resta "EUR") ma può
+    # esporre la valuta reale in raw_extracted.currency o importi.currency.
+    # Senza questa estrazione build_expense resterebbe su "EUR" e
+    # _convert_currency_strict salterebbe la conversione, registrando
+    # importi esatti ma in valuta Luogo (es. 49.79 USD → 49.79 EUR).
+    # Estraiamo la valuta reale se il documento NON è già esplicitamente EUR.
+    currency_sources = [
+        raw_extracted.get("currency"),
+        importi.get("currency"),
+        content.get("currency"),
+    ]
+    detected_currency = ""
+    for cand in currency_sources:
+        if isinstance(cand, str) and cand.strip():
+            detected_currency = cand.strip().upper()
+            break
+    if detected_currency and detected_currency != result.currency.upper():
+        result.currency = detected_currency
+        raw_norm.setdefault("currency", detected_currency)
+        result.raw = raw_norm
+
     # ── Emittente ─────────────────────────────────────────────────────
+    # Estrai sempre emittente (anche se supplier_name è già popolato)
+    # per catturare indirizzo, P.IVA e paese fornitore. Il blocco era
+    # guardato da "if not result.supplier_name" causando supplier_country
+    # vuoto quando Factum popolava il nome ma non il paese.
+    emittente: dict[str, Any] = content.get("emittente", {}) or {}
     if not result.supplier_name:
-        emittente: dict[str, Any] = content.get("emittente", {}) or {}
         result.supplier_name = emittente.get("ragione_sociale") or ""
+    if not result.supplier_vat:
         result.supplier_vat = emittente.get("partita_iva") or ""
+    if not result.supplier_address:
         result.supplier_address = emittente.get("indirizzo") or ""
     # Fallback nome fornitore da raw_extracted (chiavi LLM variabili)
     if not result.supplier_name:
@@ -320,14 +348,21 @@ def _enrich_from_payload(factum_resp: FactumResponse) -> None:
                 result.supplier_vat = candidate.strip()
                 break
     if not result.supplier_country:
-        emittente = content.get("emittente", {}) or {}
         country_candidate = (
             emittente.get("paese")
             or emittente.get("country")
             or emittente.get("country_iso")
             or ""
         )
-        country_hint = str(country_candidate or result.supplier_address or result.supplier_name)
+        # Hint composito: indirizzo + nome + P.IVA, per catturare
+        # indicatori geografici anche quando il paese non è esplicito
+        # (es. "New York, United States" nell'indirizzo, EIN nella P.IVA)
+        country_hint = " ".join(filter(None, [
+            str(country_candidate or ""),
+            result.supplier_address or "",
+            result.supplier_name or "",
+            result.supplier_vat or "",
+        ]))
         country_map = {
             "germany": "DE", "deutschland": "DE", "de": "DE", "tedesco": "DE",
             "francia": "FR", "france": "FR", "frankreich": "FR",
@@ -336,6 +371,7 @@ def _enrich_from_payload(factum_resp: FactumResponse) -> None:
             "paesi bassi": "NL", "netherlands": "NL", "niederlande": "NL", "oland": "NL",
             "irlanda": "IE", "ireland": "IE", "irland": "IE",
             "usa": "US", "united states": "US", "stati uniti": "US",
+            "new york": "US",
             "regno unito": "GB", "united kingdom": "GB", "great britain": "GB",
             "svizzera": "CH", "switzerland": "CH", "schweiz": "CH",
         }
@@ -789,6 +825,12 @@ async def process_file(
     supplier = mapper.build_supplier(result)
     expense = mapper.build_expense(result, supplier=supplier)
 
+    # Cattura importo e valuta ORIGINALI (prima della conversione) per
+    # includerli nella nota dell'autofattura SDI.
+    original_amount = expense.amount_net
+    original_currency = expense.currency
+    applied_rate: float | None = None
+
     # Applica conversione valuta se diversa da EUR (con strict mode)
     try:
         await _convert_currency_strict(expense, path, settings)
@@ -810,6 +852,11 @@ async def process_file(
             fic_error=str(exc),
             document_type=doc_type_detected,
         )
+
+    # Se la valuta è cambiata, ricava il tasso applicato dagli importi
+    # (originale convertito originale / importo EUR).
+    if original_currency != "EUR" and original_amount:
+        applied_rate = round(expense.amount_net / original_amount, 4)
 
     # Cerca o crea fornitore su FIC
     try:
@@ -896,6 +943,11 @@ async def process_file(
                 supplier_vat_number=supplier.vat_number,
                 supplier_country_iso=supplier.country_iso,
                 self_invoice_type=si_type,
+                original_amount=original_amount if original_currency != "EUR" else None,
+                original_currency=original_currency if original_currency != "EUR" else "",
+                exchange_rate=applied_rate,
+                original_invoice_number=result.invoice_number or "",
+                original_invoice_date=result.invoice_date or "",
             )
             si_resp = await fic.create_issued_document(si_request)
             fic_self_invoice_id = si_resp.id
