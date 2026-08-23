@@ -408,8 +408,8 @@ class Mapper:
                 f"Tasso cambio {exchange_rate:.4f} applicato."
             )
         notes += (
-            f" Documento elaborato via Factum Parse API "
-            f"(Zero Data Retention)."
+            " Documento elaborato via Factum Parse API "
+            "(Zero Data Retention)."
         )
 
         description = expense.description
